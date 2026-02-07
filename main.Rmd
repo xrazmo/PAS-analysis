@@ -1,0 +1,225 @@
+---
+title: "Venn Diagram"
+author: "Mohammad Razavi"
+date: "2026-02-05"
+output: html_document
+---
+
+## Load Libraries
+
+```{r load-libraries}
+rm(list=ls())
+library(tidyverse)
+library(readxl)
+library(DESeq2)
+library(sva)
+library(pheatmap)
+library(ggplot2)
+
+# Source custom functions
+source("transcriptomics_functions.R")
+
+out_dir = "./export/"
+```
+
+```{r load-data-models, eval=FALSE}
+# Step 1: Load data
+data_list <- load_transcriptomics_data(
+  counts_path = './data/count_data_all.csv',
+  metadata_path = "./data/metadata_ecphage.xlsx",
+  annotation_path = "./data/22ET500456__with-ecolik12.csv",
+  metadata_filter_col = "comment",
+  metadata_filter_pattern = "missing",
+  fname_col = "fname"
+)
+
+counts <- data_list$counts
+metadata <- data_list$metadata
+annotation <- data_list$annotation
+
+#Step 2: remove 8 mg/L samples across times
+keep_samples <- metadata %>% filter(ab_conc!=8) %>% pull(fname)
+metadata_filt <- metadata %>% filter(fname %in% keep_samples)
+counts_filt <- counts[,metadata_filt$fname]
+metadata_filt$ab_conc <- droplevels(metadata_filt$ab_conc)
+
+
+for (t in c("1h","4h","24h")){
+  
+  message(paste("--Identifying DEGs for: ", t))
+  deseq_results <- run_DESeq2_sva(counts_filt, metadata_filt,formula_str = "~ ab_conc * phage", 
+                             time_point = t)
+  res_ab <- run_lfcShrink(deseq_results$dds, coef_name = "ab_conc_4_vs_0", annotation=annotation,
+                          out_file = paste0(out_dir,"venn_degs_",t,"_phage0-ab4.csv"))
+  res_ph <- run_lfcShrink(deseq_results$dds, coef_name = "phage_1_vs_0", annotation=annotation,
+                          out_file = paste0(out_dir,"venn_degs_",t,"_phage1-ab0.csv"))
+}
+
+```
+
+```{r}
+library(patchwork)
+pvenn_res <- plot_venn_diagram('./export/')
+ppcoa_res <- plot_pcoa(counts_filt,metadata_filt)
+
+write.csv(pvenn_res$count,"./export/count_venn_diagram.csv")
+
+p<- (ppcoa_res$fig | pvenn_res$fig) 
+p+ plot_layout(widths = c(1, .8))
+```
+
+##Run ORA analysis on venn regions
+```{r}
+pvenn_res <- plot_venn_diagram('./export/')
+
+degs_1h_phage <- read.csv("./export/venn_degs_1h_phage1-ab0.csv")
+degs_4h_phage <- read.csv("./export/venn_degs_4h_phage1-ab0.csv")
+
+venn_degs_reg <- get_venn_region_deg_pathway(
+  venn_data    = pvenn_res$data,    
+  deg_1h       = degs_1h_phage,
+  deg_4h       = degs_4h_phage,
+  annotation   = annotation,
+  output_file  = "./export/phage_venn_region_degs_annotated.csv"
+)
+
+```
+```{r}
+deg_df <- read.csv("./export/phage_venn_region_degs_annotated.csv")
+pathway_summary <- deg_df %>%
+  filter(!is.na(path_name)) %>%
+  group_by(venn_group, path_name) %>%
+  summarise(
+    n_genes = n(),
+    
+    n_up   = sum(log2FoldChange > 0),
+    n_down = sum(log2FoldChange < 0),
+    
+    fraction_up = n_up / n_genes,
+    
+    median_LFC = median(log2FoldChange),
+    mean_abs_LFC = mean(abs(log2FoldChange)),
+    
+    # expression-weighted effect (optional but powerful)
+    weighted_LFC = sum(log2FoldChange * log10(baseMean + 1)) /
+                   sum(log10(baseMean + 1)),
+    
+    .groups = "drop"
+  ) %>%
+  arrange(venn_group, desc(mean_abs_LFC))
+
+pathway_summary <- pathway_summary %>%
+  mutate(
+    regulation_pattern = case_when(
+      fraction_up >= 0.7 ~ "mostly_up",
+      fraction_up <= 0.3 ~ "mostly_down",
+      TRUE               ~ "mixed"
+    )
+  )
+
+write.csv(pathway_summary,'./export/pathway_summary_venn-region.csv')
+```
+
+```{r}
+library(ggplot2)
+
+selected_pathways <- c(
+  # Early phage response (1h)
+  "Nitrogen metabolism",
+  "Nitrogen cycle",
+  "Amino sugar and nucleotide sugar metabolism",
+  "2-Oxocarboxylic acid metabolism",
+  "Citrate cycle (TCA cycle)",
+  "Carbon metabolism",
+  "Biosynthesis of amino acids",
+  "Pentose phosphate pathway",
+
+  # Sustained response (1–4h)
+  "Purine metabolism",
+  "Pyrimidine metabolism",
+  "Pantothenate and CoA biosynthesis",
+  "Biosynthesis of cofactors",
+  "Ribosome",
+  "ABC transporters",
+  "Phosphotransferase system (PTS)",
+  "Two-component system",
+  "Glycine, serine and threonine metabolism",
+
+  # Late adaptation (24h)
+  "Oxidative phosphorylation",
+  "Sulfur metabolism",
+  "Glutathione metabolism",
+  "Peptidoglycan biosynthesis",
+  "Protein export",
+  "beta-Lactam resistance",
+  "Biofilm formation",
+  "Quorum sensing",
+  "Fatty acid metabolism",
+  "Glycerophospholipid metabolism",
+  "Nucleotide metabolism"
+)
+
+pathway_summary <- pathway_summary %>%
+  mutate(
+    venn_group = factor(
+      venn_group,
+      levels = c(
+        "early_only",
+        "sustained_1h",
+        "sustained_4h",
+        "late_emerging"
+      )
+    ),
+    path_name = factor(path_name)
+  )
+
+plot_data <- pathway_summary %>%
+  group_by(path_name) %>%
+  mutate(overall_strength = max(abs(weighted_LFC), na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(path_name = sub(" - Escherichia coli K-12 MG1655$", "", path_name)) %>%
+  mutate(
+        path_name = reorder(path_name, n_genes)
+  ) 
+
+plot_data <- plot_data %>% filter(path_name %in% selected_pathways) 
+
+ggplot(plot_data,
+       aes(y = venn_group,
+           x = path_name)) +
+  
+  geom_point(aes(
+    size  = n_genes,
+    fill=weighted_LFC
+  ),color = "#bdbdbd",shape =21, alpha =0.8) +
+  scale_fill_gradient2(
+    low = "#1746A2",
+    mid = "#BBCB64",
+    high = "#C40C0C",
+    midpoint = 0,
+    name = "Weighted\nlog2FC"
+  ) +
+  scale_size_continuous(
+    range = c(2, 10),
+    name = "DE genes"
+  ) +
+  
+  labs(
+    x = "Longitudinal phage response group",
+    y = "Pathway",
+    title = "Longitudinal pathway remodeling during phage exposure"
+  ) +
+  
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.major = element_line(color = "grey90"),
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle=-90,hjust = 0, vjust = 0.5),
+    axis.text.y =element_text(),
+    plot.title = element_text(face = "bold")
+  )
+
+```
+
+
+
