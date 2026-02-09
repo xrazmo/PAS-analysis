@@ -42,31 +42,182 @@ keep_samples <- metadata %>% filter(ab_conc!=8) %>% pull(fname)
 metadata_filt <- metadata %>% filter(fname %in% keep_samples)
 counts_filt <- counts[,metadata_filt$fname]
 metadata_filt$ab_conc <- droplevels(metadata_filt$ab_conc)
+```
 
 
+```{r load-data-models, eval=FALSE}
 for (t in c("1h","4h","24h")){
   
   message(paste("--Identifying DEGs for: ", t))
   deseq_results <- run_DESeq2_sva(counts_filt, metadata_filt,formula_str = "~ ab_conc * phage", 
                              time_point = t)
-  res_ab <- run_lfcShrink(deseq_results$dds, coef_name = "ab_conc_4_vs_0", annotation=annotation,
-                          out_file = paste0(out_dir,"venn_degs_",t,"_phage0-ab4.csv"))
-  res_ph <- run_lfcShrink(deseq_results$dds, coef_name = "phage_1_vs_0", annotation=annotation,
-                          out_file = paste0(out_dir,"venn_degs_",t,"_phage1-ab0.csv"))
+   run_lfcShrink(deseq_results$dds, coef_name = "ab_conc_4_vs_0", annotation=annotation,
+                          out_file = paste0(out_dir,"venn_degs_",t,"_phage0-ab4.csv"),LFC=1,padj = 0.05)
+   run_lfcShrink(deseq_results$dds, coef_name = "phage_1_vs_0", annotation=annotation,
+                          out_file = paste0(out_dir,"venn_degs_",t,"_phage1-ab0.csv"), LFC=1,padj = 0.05)
+  
+  run_lfcShrink(deseq_results$dds, coef_name = "ab_conc_4_vs_0", annotation=annotation,
+                          out_file = paste0(out_dir,"all_genes_",t,"_phage0-ab4.csv"))
+  run_lfcShrink(deseq_results$dds, coef_name = "phage_1_vs_0", annotation=annotation,
+                          out_file = paste0(out_dir,"all_genes_",t,"_phage1-ab0.csv"))
 }
 
 ```
 
+## enriched KEGG
+
+```{r}
+#saves the file in export
+run_gsea_venn("./export/")
+ 
+```
+
+
+
 ```{r}
 library(patchwork)
+source("transcriptomics_functions.R")
+
 pvenn_res <- plot_venn_diagram('./export/')
+write.csv(pvenn_res$count,"./export/count_venn_diagram.csv")
 ppcoa_res <- plot_pcoa(counts_filt,metadata_filt)
 
-write.csv(pvenn_res$count,"./export/count_venn_diagram.csv")
+gsea_all <- read.csv('./export/gsea_all_venn.csv')
+pgsea <- plot_pathway_dotplot(gsea_all)
 
-p<- (ppcoa_res$fig | pvenn_res$fig) 
-p+ plot_layout(widths = c(1, .8))
+pgsea <- pgsea + theme(legend.position = c(0.9, 1.06))
+ppcoa <- ppcoa_res$fig+ theme(legend.position="top")
+
+p<- ( ppcoa /  pvenn_res$fig) + plot_layout(heights = c(0.8, 1.2),widths = c(0.5,1.5))
+(p|pgsea) + plot_layout(widths = c(1.4, .6)) + plot_annotation(tag_levels = 'A')
+
+ggsave('./figures/pcoa_venn_dotplot.pdf',device='pdf',height = 10,width = 12)
 ```
+
+
+
+## Compare the phage response vs the antibiotic response
+```{r}
+degs_1h_phage <- read.csv("./export/venn_degs_1h_phage1-ab0.csv")
+degs_4h_phage <- read.csv("./export/venn_degs_4h_phage1-ab0.csv")
+degs_1h_ab <- read.csv("./export/venn_degs_1h_phage0-ab4.csv")
+degs_4h_ab <- read.csv("./export/venn_degs_4h_phage0-ab4.csv")
+
+degs_list <- list(
+    phage_1h  = degs_1h_phage,
+    phage_4h  = degs_4h_phage,
+    ab_1h     = degs_1h_ab,
+    ab_4h     = degs_4h_ab
+  )
+  
+df_degs<- degs_list |>
+    enframe(name = "deg_group", value = "deg_data") |>
+    unnest(deg_data)
+
+kegg_map  <- get_pathways(unique(df_degs$keggid))
+df_degs <- df_degs %>% merge(kegg_map,by.x='keggid',by.y='kegg',all.x=T) 
+
+pathway_summary <- df_degs %>%
+  filter(!is.na(path_name)) %>%
+  group_by(deg_group, path_name) %>%
+  summarise(
+    n_genes = n(),
+    
+    n_up   = sum(log2FoldChange > 0),
+    n_down = sum(log2FoldChange < 0),
+    
+    fraction_up = n_up / n_genes,
+    
+    median_LFC = median(log2FoldChange),
+    mean_abs_LFC = mean(abs(log2FoldChange)),
+    
+    # expression-weighted effect (optional but powerful)
+    weighted_LFC = sum(log2FoldChange * log10(baseMean + 1)) /
+                   sum(log10(baseMean + 1)),
+    
+    .groups = "drop"
+  ) %>%
+  arrange(deg_group, desc(mean_abs_LFC))
+
+pathway_summary <- pathway_summary %>%
+  mutate(
+    regulation_pattern = case_when(
+      fraction_up >= 0.7 ~ "mostly_up",
+      fraction_up <= 0.3 ~ "mostly_down",
+      TRUE               ~ "mixed"
+    )
+  )
+```
+
+
+```{r}
+pathway_summary <- pathway_summary %>%
+  mutate(
+    deg_group = factor(
+      deg_group,
+      levels = c(
+        "ab_1h",
+        "ab_4h",
+        "phage_1h",
+        "phage_4h"
+      )
+    ),
+    path_name = factor(path_name)
+  )
+
+plot_data <- pathway_summary %>% filter(n_genes>5) %>%
+  group_by(path_name) %>%
+  mutate(overall_strength = max(abs(weighted_LFC), na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(path_name = sub(" - Escherichia coli K-12 MG1655$", "", path_name)) %>%
+  mutate(
+        path_name = reorder(path_name, n_genes)
+  ) 
+
+
+ggplot(plot_data,
+       aes(y = deg_group,
+           x = path_name)) +
+  
+  geom_point(aes(
+    size  = n_genes,
+    fill=weighted_LFC
+  ),color = "#bdbdbd",shape =21, alpha =0.8) +
+  scale_fill_gradient2(
+    low = "#1746A2",
+    mid = "#BBCB64",
+    high = "#C40C0C",
+    midpoint = 0,
+    name = "Weighted\nlog2FC"
+  ) +
+  scale_size_continuous(
+    range = c(2, 10),
+    name = "DE genes"
+  ) +
+  
+  labs(
+    x = "Longitudinal phage response group",
+    y = "Pathway",
+    title = "Longitudinal pathway remodeling during phage exposure"
+  ) +
+  
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.major = element_line(color = "grey90"),
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle=-90,hjust = 0, vjust = 0.5),
+    axis.text.y =element_text(),
+    plot.title = element_text(face = "bold")
+  )
+
+```
+
+
+
+
+
+
+
 
 ##Run ORA analysis on venn regions
 ```{r}
@@ -84,6 +235,7 @@ venn_degs_reg <- get_venn_region_deg_pathway(
 )
 
 ```
+
 ```{r}
 deg_df <- read.csv("./export/phage_venn_region_degs_annotated.csv")
 pathway_summary <- deg_df %>%
