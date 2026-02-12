@@ -4,6 +4,10 @@ library(sva)
 library(dplyr)
 library(ggVennDiagram)
 library(ggpubr)
+library(ggchicklet)
+library(ggh4x)
+library(ggtext)
+
 # Function to load counts, metadata, and annotation
 load_transcriptomics_data <- function(counts_path,
                                       metadata_path,
@@ -381,178 +385,260 @@ plot_pathway_dotplot <- function(gsea_all){
   return(pkegg)
 }
 
-###--------Replaced by KEGG GSEA
-get_venn_region_deg_pathway <- function(
-    venn_data,
-    deg_1h,
-    deg_4h,
-    annotation,
-    output_file = NULL
+assess_interactions <- function(
+    in_dir,
+    out_dir = "./export/interaction/",
+    time_points = c("1h", "4h", "24h"),
+    annotation
 ) {
-  library(dplyr)
-  library(tidyr)
-  library(purrr)
-  library(KEGGREST)    # for keggGet
-  library(clusterProfiler)  # for bitr_kegg
+  stopifnot(dir.exists(in_dir))
+  if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
   
-  message("→ Starting Venn region + KEGG pathway annotation...")
-  
-  # ────────────────────────────────────────────────
-  # 1. Compute Venn regions (exclusive & intersection groups)
-  # ────────────────────────────────────────────────
-  message("  Computing Venn regions...")
-  
-  # Helper to compute exclusive sets
-  exclusive <- function(target, others) {
-    setdiff(target, Reduce(union, others))
+  if (!is.data.frame(annotation) || !"ID" %in% colnames(annotation)) {
+    stop("annotation must be a data frame with column 'ID'")
   }
   
-  # Define your regions generically (you can easily add/modify these)
-  venn_regions <- list(
-    early_only = exclusive(
-      venn_data$Phage_1h,
-      list(venn_data$Phage_4h, venn_data$AB_1h, venn_data$AB_4h, venn_data$AB_24h, venn_data$Phage_24h)
-    ),
-    sustained_1h_4h = exclusive(
-      intersect(venn_data$Phage_1h, venn_data$Phage_4h),
-      list(venn_data$AB_1h, venn_data$AB_4h, venn_data$AB_24h, venn_data$Phage_24h)
-    ),
-    late_emerging = exclusive(
-      venn_data$Phage_4h,
-      list(venn_data$Phage_1h, venn_data$AB_1h, venn_data$AB_4h, venn_data$AB_24h, venn_data$Phage_24h)
-    )
-    # Add more regions here if needed, e.g.:
-    # phage_specific = exclusive(union(venn_data$Phage_1h, venn_data$Phage_4h), ...)
-  )
-  
-  # Convert to tidy long format
-  df_venn_genes <- venn_regions |>
-    enframe(name = "venn_group", value = "gene") |>
-    unnest(gene) |>
-    left_join(annotation, by = c("gene" = "ID")) |>   # assuming ID is the gene column in annotation
-    arrange(venn_group, gene)
-  
-  message("  → Found ", nrow(df_venn_genes), " gene-region assignments")
-  
-  # ────────────────────────────────────────────────
-  # 2. Match DEGs (logFC, padj, etc.) to regions
-  # ────────────────────────────────────────────────
-  message("  Matching DE values to regions...")
-  
-  # Helper to filter DEGs for a region
-  get_degs_for_group <- function(group_name, time_df) {
-    genes_in_group <- df_venn_genes |>
-      filter(venn_group == group_name) |>
-      pull(gene)
-    time_df |> filter(gene %in% genes_in_group)
+  # Helper: robust gene column extraction
+  standardize_gene_col <- function(df) {
+    # Common DESeq2 csv patterns: gene, Gene, rownames stored as X or Row.names
+    gene_candidates <- c("gene", "Gene", "ID", "Row.names", "row.names", "X", "X1")
+    found <- gene_candidates[gene_candidates %in% colnames(df)]
+    if (length(found) == 0) {
+      stop("Could not find a gene column in input. Columns: ", paste(colnames(df), collapse=", "))
+    }
+    gene_col <- found[1]
+    df <- df %>% dplyr::rename(gene = !!gene_col)
+    df
   }
   
-  lfc_matched <- list(
-    early_only       = get_degs_for_group("early_only", deg_1h),
-    sustained_1h     = get_degs_for_group("sustained_1h_4h", deg_1h),
-    sustained_4h     = get_degs_for_group("sustained_1h_4h", deg_4h),
-    late_emerging    = get_degs_for_group("late_emerging", deg_4h)
-  )
+  prep_res <- function(df, prefix) {
+    df <- standardize_gene_col(df)
+    
+    req <- c("gene", "log2FoldChange", "padj")
+    missing <- setdiff(req, colnames(df))
+    if (length(missing) > 0) {
+      stop("Missing required columns: ", paste(missing, collapse=", "),
+           " in file with prefix ", prefix)
+    }
+    
+    df %>%
+      dplyr::select(gene, log2FoldChange, padj) %>%
+      # enforce 1 row per gene (protect against prior merges/duplicates)
+      dplyr::group_by(gene) %>%
+      dplyr::slice(1) %>%
+      dplyr::ungroup() %>%
+      dplyr::rename(
+        !!paste0("lfc_", prefix) := log2FoldChange,
+        !!paste0("padj_", prefix) := padj
+      )
+  }
   
-  df_degs_venn <- lfc_matched |>
-    enframe(name = "venn_group", value = "deg_data") |>
-    unnest(deg_data)
+  results_list <- list()
+  
+  for (t in time_points) {
+    message("Processing time point: ", t)
+    
+    f_phage <- file.path(in_dir, paste0("all_genes_", t, "_phage1-ab0.csv"))
+    f_ab <- file.path(in_dir, paste0("all_genes_", t, "_phage0-ab4.csv"))
+    f_int <- file.path(in_dir, paste0("all_genes_", t, "_abconc4.phage1.csv"))
+    
+    if (!all(file.exists(c(f_phage, f_ab, f_int)))) {
+      warning("Skipping ", t, ": missing one or more files")
+      next
+    }
+    
+    res_phage <- read.csv(f_phage, stringsAsFactors = FALSE, check.names = FALSE)
+    res_ab    <- read.csv(f_ab,    stringsAsFactors = FALSE, check.names = FALSE)
+    res_int   <- read.csv(f_int,   stringsAsFactors = FALSE, check.names = FALSE)
+    
+    phage_short <- prep_res(res_phage, "phage")
+    ab_short    <- prep_res(res_ab,    "ab")
+    int_short   <- prep_res(res_int,   "interaction")
+    
+    res_all <- phage_short %>%
+      full_join(ab_short, by = "gene") %>%
+      full_join(int_short, by = "gene")
+    
+    # Diagnostics
+    message("  N genes merged: ", nrow(res_all))
+    message("  Duplicated genes: ", sum(duplicated(res_all$gene)))
+    message("  NA padj rates (phage/ab/int): ",
+            round(mean(is.na(res_all$padj_phage)), 3), " / ",
+            round(mean(is.na(res_all$padj_ab)), 3), " / ",
+            round(mean(is.na(res_all$padj_interaction)), 3))
+    
+    res_all <- res_all %>%
+      mutate(
+        sig_phage = !is.na(padj_phage) & padj_phage < 0.05 & abs(lfc_phage) > 1,
+        sig_ab    = !is.na(padj_ab)    & padj_ab    < 0.05 & abs(lfc_ab) > 1,
+        sig_interaction = !is.na(padj_interaction) & padj_interaction < 0.05 &
+          abs(lfc_interaction) > 1,
+        
+        response_class = case_when(
+          sig_interaction & !sig_ab & !sig_phage ~ "Combination-specific",
+          sig_interaction & sig_ab & !sig_phage  ~ "Antibiotic-amplified-by-phage",
+          sig_interaction & !sig_ab & sig_phage  ~ "Phage-modified-by-antibiotic",
+          sig_ab & sig_phage & sig_interaction   ~ "General stress",
+          sig_ab & sig_phage & !sig_interaction  ~ "Additive (no interaction)",
+          sig_ab & !sig_phage & !sig_interaction ~ "Antibiotic-only",
+          sig_phage & !sig_ab & !sig_interaction ~ "Phage-only",
+          TRUE                                   ~ "No significant change"
+        )
+      ) %>%
+      left_join(annotation, by = c("gene" = "ID"))
+    
+    message("  Annotation hit rate: ", round(mean(res_all$gene %in% annotation$ID), 3))
+    
+    outfile <- file.path(out_dir, paste0("synergy_", t, ".csv"))
+    write.csv(res_all, outfile, row.names = FALSE)
+    
+    results_list[[t]] <- res_all
+  }
+  
+  df_results <- results_list |>
+    tibble::enframe(name = "time_point", value = "response_data") |>
+    tidyr::unnest(response_data)
+  
+  summary_responses <- df_results %>%
+    group_by(time_point, response_class) %>%
+    summarise(N = n(), .groups = "drop")
+  
+  write.csv(df_results, file.path(out_dir, "combo_therapy_responses.csv"), row.names = FALSE)
+  write.csv(summary_responses, file.path(out_dir, "combo_therapy_responses_summary.csv"), row.names = FALSE)
+  
+  invisible(list(data = df_results, summary = summary_responses))
+}
 
-  # ────────────────────────────────────────────────
-  # 3. KEGG mapping & pathway info
-  # ────────────────────────────────────────────────
-  message("  Performing KEGG mapping and fetching pathway info...")
+
+plot_lfc_chicklets <- function(
+    data,
+    response_class,
+    gene_category = NULL,
+    filter_col = c("time_point","gene","lfc_ab","lfc_interaction","gene_name"),
+    label_font_pt = 9,
+    label_color = "#435663") {
   
-  unique_kegg_ids <- unique(df_degs_venn$keggid)
+  # --- your code, same flow ---
+  df <- data %>%
+    dplyr::filter(response_class == !!response_class) %>%
+    dplyr::rename(gene_name = `gene.y`)
   
-  kegg_map <- bitr_kegg(
-    geneID   = unique_kegg_ids,
-    fromType = "kegg",
-    toType   = "Path",
-    organism = "eco"
-  )
+  # keep your select, but make it non-erroring if one column is missing
+  # (this is the one change that prevents "full of errors" situations)
   
-  unique_paths <- unique(kegg_map$Path)
+  lvls <- c("ab","phage","interaction")
+  cols <-  c()
+  filter_col <- intersect(filter_col, colnames(df))
+  if("lfc_ab" %in% filter_col){
+    cols <-  c(cols,"lfc_ab")
+  }
+  if("lfc_phage" %in% filter_col){
+    
+    cols <-  c(cols,"lfc_phage")
+  }
+  if("lfc_interaction" %in% filter_col){
+    cols <-  c(cols,"lfc_interaction")
+  }
   
-  message("  → Fetching info for ", length(unique_paths), " unique KEGG pathways...")
   
-  # Fetch pathway info safely
-  path_info_list <- map(
-    unique_paths,
-    ~ tryCatch(
-      keggGet(.x)[[1]],
-      error = function(e) {
-        message("Warning: Failed to fetch ", .x, " – using NAs")
-        list(NAME = NA, CLASS = NA, PATHWAY_MAP = NA)
-      }
-    )
-  )
   
-  path_info_df <- tibble(
-    Path             = unique_paths,
-    path_name        = map_chr(path_info_list, ~ paste(.x$NAME,        collapse = " | ") %||% NA_character_),
-    path_class       = map_chr(path_info_list, ~ paste(.x$CLASS,       collapse = " | ") %||% NA_character_),
-    path_description = map_chr(path_info_list, ~ paste(.x$PATHWAY_MAP, collapse = " | ") %||% NA_character_)
-  )
+  df <- df %>%
+    dplyr::select(!!filter_col) %>%
+    tidyr::pivot_longer(
+      cols = !!cols,
+      names_to = "group",
+      values_to = "LFC",
+      names_prefix = "lfc_"
+    ) %>%
+    dplyr::filter(!is.na(gene_name)) %>%
+    dplyr::mutate(group = factor(group, levels = !!lvls))
   
-  # Join pathway info to kegg_map
-  kegg_map <- kegg_map |> left_join(path_info_df, by = "Path")
   
-  # Final merge with DEG data
-  df_final <- df_degs_venn |>
-    left_join(kegg_map, by = c("keggid" = "kegg")) |>
-    arrange(venn_group, gene)
   
-  # ────────────────────────────────────────────────
-  # 4. Save & return
-  # ────────────────────────────────────────────────
-  if (!is.null(output_file)) {
-    message("  → Writing result to: ", output_file)
-    write.csv(df_final, output_file, row.names = FALSE)
+  
+  if (!is.null(gene_category)) {
+    df <- df %>%
+      merge(gene_category, by = "gene_name", all.x = TRUE) %>%
+      arrange(functional_group) %>%
+      mutate(
+        gorder = dplyr::row_number(),
+        label = paste0(
+          "***", xfun::html_escape(gene_name), "***",
+          "<span style='font-size:", label_font_pt, "pt; color:", label_color, ";'> (",
+          xfun::html_escape(functional_group),
+          ")</span>"
+        )
+      )
   } else {
-    message("  → No output file specified; returning object only")
+    df <- df %>%
+      mutate(
+        gorder = dplyr::row_number(),
+        label = paste0("***", xfun::html_escape(gene_name), "***")
+      )
   }
   
-  message("Done. Final table has ", nrow(df_final), " rows.")
-  invisible(df_final)
+  height_df <- df %>%
+    dplyr::group_by(time_point) %>%
+    dplyr::summarise(n_genes = dplyr::n_distinct(gene), .groups = "drop") %>%
+    dplyr::mutate(height = n_genes / min(n_genes))
+  
+  # dirty solution for legend fix
+  dummy <- df[rep(1, length(lvls)), ]   # copy structure
+  dummy[] <- NA                                   # set everything NA
+  dummy$group <- factor(lvls, levels = lvls)
+  dummy$time_point <- "4h"
+  df <- rbind(df, dummy)
+  
+  p <- ggplot(data = df) +
+    geom_chicklet(aes(x = reorder(label, gorder), y = LFC, color = group),
+                  position = position_dodge2(reverse = TRUE, padding = 0.3),
+                  size = .3, fill = "white", width = 0.6, radius = grid::unit(2, "pt"),na.rm = TRUE
+    ) +
+    geom_chicklet(aes(x = reorder(label, gorder), y = LFC, color = group, fill = group),
+                  alpha = 0.6,
+                  position = position_dodge2(reverse = TRUE, padding = 0.3),
+                  width = 0.6, size = .3, radius = grid::unit(2, "pt"),na.rm = TRUE
+    ) +
+    geom_hline(yintercept = 0, color = "grey60", linewidth = 0.5, linetype = "dashed") +
+    facet_wrap(~time_point, scales = "free_y", ncol = 1) +
+    scale_fill_manual(
+      values = c(phage = "#347928", ab = "#FF7100", interaction = "#912BBC"),
+      breaks = c("ab", "phage", "interaction"),   # <- forces legend order + presence
+      drop = FALSE,                               # <- keep missing levels in legend
+      labels = c(ab = "Antibiotic Only", phage = "Phage Only", interaction = "Interactions"),
+      na.translate = FALSE,
+      name = "Response classes"
+    ) +
+    scale_color_manual(values = c("phage" = "#347928", "ab" = "#FF7100", "interaction" = "#912BBC"),
+                       guide = "none") +
+    labs(
+      x = "Gene (functional group)",
+      y = "Log2(Fold Change)",
+      title = response_class
+    ) +
+    theme_minimal() +
+    theme(
+      plot.text = element_text(size = 11),
+      axis.title = element_text(size = 11),
+      
+      # because coord_flip()
+      axis.title.y = element_text(size=10),
+      axis.title.x = element_text(size=10),
+      axis.text.y = ggtext::element_markdown(size = 11),
+      axis.text.y.left = ggtext::element_markdown(size = 11),
+      axis.text.y.right = ggtext::element_markdown(size = 11),
+      
+      plot.title = element_text(hjust = 0.5),
+      legend.text = element_text(size = 10),
+      legend.title = element_text(size = 10),
+      legend.position = "top",
+      panel.grid.minor.x = element_blank(),
+      panel.grid.major.x = element_line(linetype = "dashed", size = .3)
+    ) +
+    
+    facetted_pos_scales(x = lapply(height_df$height, function(h) scale_x_discrete())) +
+    force_panelsizes(rows = height_df$height) +
+    coord_flip()
+  return(p)
 }
 
-get_pathways <- function(unique_kegg_ids){
-  
-  message("  Performing KEGG mapping and fetching pathway info...")
-  
-  kegg_map <- bitr_kegg(
-    geneID   = unique_kegg_ids,
-    fromType = "kegg",
-    toType   = "Path",
-    organism = "eco"
-  )
-  
-  unique_paths <- unique(kegg_map$Path)
-  
-  message("  → Fetching info for ", length(unique_paths), " unique KEGG pathways...")
-  
-  # Fetch pathway info safely
-  path_info_list <- map(
-    unique_paths,
-    ~ tryCatch(
-      keggGet(.x)[[1]],
-      error = function(e) {
-        message("Warning: Failed to fetch ", .x, " – using NAs")
-        list(NAME = NA, CLASS = NA, PATHWAY_MAP = NA)
-      }
-    )
-  )
-  
-  path_info_df <- tibble(
-    Path             = unique_paths,
-    path_name        = map_chr(path_info_list, ~ paste(.x$NAME,        collapse = " | ") %||% NA_character_),
-    path_class       = map_chr(path_info_list, ~ paste(.x$CLASS,       collapse = " | ") %||% NA_character_),
-    path_description = map_chr(path_info_list, ~ paste(.x$PATHWAY_MAP, collapse = " | ") %||% NA_character_)
-  )
-  
-  # Join pathway info to kegg_map
-  kegg_map <- kegg_map |> left_join(path_info_df, by = "Path")
-  
- return(kegg_map)
-}
