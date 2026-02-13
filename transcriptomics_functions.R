@@ -1,12 +1,20 @@
 # transcriptomics_analysis.R
 library(DESeq2)
 library(sva)
-library(dplyr)
+library(tidyverse)
 library(ggVennDiagram)
 library(ggpubr)
 library(ggchicklet)
 library(ggh4x)
 library(ggtext)
+library(readr)
+library(clusterProfiler)
+library(tidyr)
+library(ComplexHeatmap)
+library(circlize)
+library(grid)
+library(stringr)
+library(RColorBrewer)
 
 # Function to load counts, metadata, and annotation
 load_transcriptomics_data <- function(counts_path,
@@ -115,18 +123,26 @@ run_DESeq2_sva <- function(counts, metadata,
 }
 
 # Function to run lfcShrink and save results
-run_lfcShrink <- function(dds, coef_name, LFC=NULL, padj=NULL, out_file = NULL,annotation=NULL) {
+run_lfcShrink <- function(dds, coef_name=NULL, contrast_c=NULL, LFC=NULL, padj=NULL, out_file = NULL,annotation=NULL) {
   library(DESeq2)
   library(dplyr)
   
-  # Check if coefficient exists in DESeq2 object
-  if(!(coef_name %in% resultsNames(dds))) {
-    stop("Coefficient '", coef_name, "' not found in DESeq2 object. Available names: ", 
-         paste(resultsNames(dds), collapse = ", "))
-  }
+  
   
   # Run lfcShrink
-  res <- lfcShrink(dds, coef = coef_name, type = "apeglm") %>%
+  if(!is.null(contrast_c)){
+    res <- lfcShrink(dds, contrast = list(contrast_c), type = "ashr")
+  }else{
+    
+    # Check if coefficient exists in DESeq2 object
+    if(!(coef_name %in% resultsNames(dds))) {
+      stop("Coefficient '", coef_name, "' not found in DESeq2 object. Available names: ", 
+           paste(resultsNames(dds), collapse = ", "))
+    }
+    
+    res <- lfcShrink(dds, coef = coef_name, type = "apeglm")
+  }
+  res <- res %>%
     as.data.frame() %>%
     rownames_to_column("gene") %>%
     mutate(coef = coef_name)  # store the contrast name
@@ -151,14 +167,25 @@ run_lfcShrink <- function(dds, coef_name, LFC=NULL, padj=NULL, out_file = NULL,a
 
 plot_venn_diagram <- function(in_dir){
   
-  files <- list.files(
-    path = in_dir,
-    pattern = "venn_degs*",
-    full.names = TRUE
-  )
+  files <- c(file.path(in_dir,"all_genes_1h_phage0-ab4.csv"),
+             file.path(in_dir,"all_genes_1h_phage1-ab0.csv"),
+            
+             
+             file.path(in_dir,"all_genes_4h_phage0-ab4.csv"),
+             file.path(in_dir,"all_genes_4h_phage1-ab0.csv"),
+             
+             file.path(in_dir,"all_genes_24h_phage0-ab4.csv"),
+             file.path(in_dir,"all_genes_24h_phage1-ab0.csv"))
   
+
+  missing <- files[!file.exists(files)]
+  if (length(missing) > 0) {
+    stop("Missing files:\n", paste(missing, collapse = "\n"))
+  }
+
   deg_list <- map(files, ~ {
     read_csv(.x, show_col_types = FALSE) %>%
+      filter(abs(log2FoldChange)>1 & padj<0.05 ) %>%
       pull(gene) %>% unique()
   })
   
@@ -166,12 +193,11 @@ plot_venn_diagram <- function(in_dir){
     "1h: ATM+",
     "1h: Phage+",
     
-    "24h: ATM+",
-    "24h: Phage+",
-    
     "4h: ATM+",
-    "4h: Phage+"
-  )
+    "4h: Phage+",
+    
+    "24h: ATM+",
+    "24h: Phage+")
   
   
   names(deg_list) <- labels
@@ -181,25 +207,27 @@ plot_venn_diagram <- function(in_dir){
                 label = "count",           # shows number in each region
                 category.names = names(venn_list),
                 set_color = c("#4CC9FE","#133E87",
-                              "#00FF9C","#347928",
-                              "#FFA09B", "#B82132")[1:length(venn_list)],
+                              "#FFA09B", "#B82132",
+                              "#00FF9C","#347928")[1:length(venn_list)],
                 label_geom = "text",
                 label_alpha = 0.8,
-                edge_size = 0.5) +
+                edge_size = 0.5,
+                set_size = 3,
+                label_size = 4) +
     ggplot2::scale_fill_gradient2(low = "#ffffff",high = "#D84040") +
-    theme(legend.position = "none",text=element_text(size=10)) 
+    theme(legend.position = "none",text=element_text(size=5)) 
  
  # get tabular data
  labels2 <- c(
    "AB_1h",
    "Phage_1h",
    
-   "AB_24h",
-   "Phage_24h",
-   
    "AB_4h",
-   "Phage_4h"
- )
+   "Phage_4h",
+   
+   "AB_24h",
+   "Phage_24h")
+ 
  names(deg_list) <- labels2
  all_genes <- unique(unlist(deg_list))
  
@@ -270,10 +298,10 @@ plot_pcoa <- function(counts,metadata){
     theme(text=element_text(size=10),
           axis.title=element_text(size=10),
           legend.text=element_text(size=9),
-          legend.title = element_text(size=9),
-          legend.position="top", legend.box="vertical",legend.direction = "vertical",
+          legend.title = element_text(size=8,face="bold"),
+          legend.position="bottom", legend.box="vertical",legend.direction = "vertical",
           legend.box.spacing = unit(0, "pt"),
-          legend.margin = margin(t = -10, r = 0, b = 0, l = 0, unit = "pt"))+
+          legend.margin = margin(t = 3, r = 0, b = 0, l = 0, unit = "pt"))+
     guides(fill = guide_legend(ncol=6,title.position = "top",
                                title.hjust=0.5, override.aes = list(shape = 21,size=3)),
            shape = guide_legend(ncol=3,nrow=1,title.position = "top", 
@@ -321,19 +349,33 @@ run_gsea<- function(data){
   return(gsea_result_df)
 }
 
-run_gsea_venn <- function(in_dir){
-  files <- list.files(
-    path = in_dir,
-    pattern = "all_genes*",
-    full.names = TRUE
-  )
+run_gsea_base <- function(in_dir,out_dir){
   
+  files <- c(file.path(in_dir,"all_genes_1h_phage0-ab4.csv"),
+             file.path(in_dir,"all_genes_1h_phage1-ab0.csv"),
+             file.path(in_dir,"combo_1h_abconc4.phage1.csv"),
+             
+             file.path(in_dir,"all_genes_4h_phage0-ab4.csv"),
+             file.path(in_dir,"all_genes_4h_phage1-ab0.csv"),
+             file.path(in_dir,"combo_4h_abconc4.phage1.csv"),
+             
+             file.path(in_dir,"all_genes_24h_phage0-ab4.csv"),
+             file.path(in_dir,"all_genes_24h_phage1-ab0.csv"),
+             file.path(in_dir,"combo_24h_abconc4.phage1.csv"))
+  print(files)
+  missing <- files[!file.exists(files)]
+  if (length(missing) > 0) {
+    stop("Missing files:\n", paste(missing, collapse = "\n"))
+  }
   deg_list <- map(files, ~ {
     read_csv(.x, show_col_types = FALSE) 
   })
   
   gsea_list <- map(deg_list,~{run_gsea(.x)})
-  labels <- c("ab_1h","phage_1h","ab_24h","phage_24h","ab_4h","phage_4h")
+  labels <- c("ab_1h","phage_1h","combo_1h",
+              "ab_4h","phage_4h","combo_4h",
+              "ab_24h","phage_24h","combo_24h")
+  
   names(gsea_list) <- labels
   
   gsea_all<- gsea_list |>
@@ -349,27 +391,275 @@ run_gsea_venn <- function(in_dir){
     mutate(
       treatment = case_when(treatment == "phage" ~ "Phage", 
                             treatment == "ab"~ "Antibiotic", 
+                            treatment == "combo"~ "Antibiotic + Phage", 
                             TRUE ~ treatment))
   
-  write.csv(gsea_all,paste0(in_dir,"/gsea_all_venn.csv"))
+  ifelse(!dir.exists(file.path(out_dir)),
+         dir.create(file.path(out_dir)),
+         "Directory Exists")
+  
+  write.csv(gsea_all,paste0(out_dir,"/gsea_all_3_cat.csv"))
 }
 
-plot_pathway_dotplot <- function(gsea_all){
+plot_gsea_heatmap <- function(gsea_all,pathway_category){
+  
+  gsea_all <- gsea_all %>% filter(padj<0.05) %>%
+    merge(pathway_category,by="pathway",all.x=T) %>%
+    arrange(category,NES) %>% 
+    mutate(porder=row_number())
+  
+  
+  all_tp <- c("1h","4h","24h")
+  all_tr <- c("Antibiotic","Phage","Antibiotic + Phage")
+  
+  # choose your row id:
+  row_id <- "pathway"   # or "label"
+  
+  
+  pathways_ordered <- gsea_all %>%
+    distinct(.data[[row_id]], porder, category) %>%
+    arrange(porder) %>%
+    pull(.data[[row_id]])
+  
+  df_full <- gsea_all %>%
+    mutate(
+      time_point = factor(time_point, levels = all_tp),
+      treatment  = factor(treatment, levels = all_tr),
+      le_signal = as.numeric(str_match(leading_edge, "signal=(\\d+)%")[,2]),
+      le_tags   = as.numeric(str_match(leading_edge, "tags=(\\d+)%")[,2]),
+      le_list   = as.numeric(str_match(leading_edge, "list=(\\d+)%")[,2])
+    ) %>%
+    # make sure every pathway has every treatment x time_point combination
+    complete(
+      !!rlang::sym(row_id) := pathways_ordered,
+      treatment = factor(all_tr, levels = all_tr),
+      time_point = factor(all_tp, levels = all_tp)
+    ) %>%
+    # bring category back (if complete created NAs)
+    left_join(
+      gsea_all %>% distinct(.data[[row_id]], category),
+      by = setNames(row_id, row_id)
+    )%>% rename(category=`category.y`)
+  
+  make_mat <- function(trt) {
+    m <- df_full %>%
+      filter(treatment == trt) %>%
+      select(!!rlang::sym(row_id), time_point, NES) %>%
+      pivot_wider(names_from = time_point, values_from = NES) %>%
+      arrange(match(.data[[row_id]], pathways_ordered))
+    
+    mat <- as.matrix(m[, all_tp])
+    rownames(mat) <- m[[row_id]]
+    mat
+  }
+  make_mat_signal <- function(trt) {
+    
+    m <- df_full %>%
+      filter(treatment == trt) %>%
+      select(!!rlang::sym(row_id), time_point, le_signal) %>%
+      tidyr::pivot_wider(
+        names_from = time_point,
+        values_from = le_signal
+      ) %>%
+      arrange(match(.data[[row_id]], pathways_ordered))
+    
+    mat <- as.matrix(m[, all_tp])
+    rownames(mat) <- m[[row_id]]
+    
+    mat
+  }
+  
+  mat_ab  <- make_mat("Antibiotic")
+  mat_ph  <- make_mat("Phage")
+  mat_int <- make_mat("Antibiotic + Phage")
+  
+  mat <- cbind(mat_ab, mat_ph, mat_int)         # 9 columns total
+  
+  mat_ab_sig  <- make_mat_signal("Antibiotic")
+  mat_ph_sig  <- make_mat_signal("Phage")
+  mat_int_sig <- make_mat_signal("Antibiotic + Phage")
+  
+  mat_signal <- cbind(mat_ab_sig, mat_ph_sig, mat_int_sig)
+  
+  
+  identical(rownames(mat_signal), rownames(mat))
+  identical(colnames(mat_signal), colnames(mat))
+  
+  # robust cap so one huge value doesn't dominate
+  cap <- quantile(mat_signal, 0.95, na.rm = TRUE)
+  cap <- ifelse(is.na(cap) || cap == 0, 1, cap)
+  
+  size01 <- pmin(mat_signal, cap) / cap
+  
+  
+  row_category <- df_full %>%
+    distinct(.data[[row_id]], category) %>%
+    arrange(match(.data[[row_id]], pathways_ordered)) %>%
+    pull(category)
+  
+  
+  column_split <- factor(
+    rep(c("Antibiotic","Phage","Antibiotic + Phage"), each = length(all_tp)),
+    levels = c("Antibiotic","Phage","Antibiotic + Phage")
+  )
+  colnames(mat) <- rep(all_tp, times = 3)
+  
+  
+  
+  
+  # color mapping for NES
+  col_fun <- colorRamp2(
+    c(min(mat, na.rm = TRUE), 0, max(mat, na.rm = TRUE)),
+    c("#1746A2", "#F5F5F0", "#C40C0C")
+  )
+  cats <- unique(df_full$category)
+  cat_color <- setNames(
+    colorRampPalette(brewer.pal(12, "Set3"))(length(cats)),
+    cats
+  )
+  
+  # row annotation + split rows by category 
+  ha_row <- rowAnnotation(
+    Category = row_category,
+    col = list(Category=cat_color),
+    show_annotation_name = FALSE,
+    annotation_legend_param = list(
+      Category = list(
+        direction = "horizontal",
+        title_position = "topcenter",
+        ncol=3,
+        title_gp  = grid::gpar(fontsize = 8,fontface = "bold"),
+        labels_gp = grid::gpar(fontsize = 8)
+      )
+    )
+  )
+  
+  ha_top<- HeatmapAnnotation(
+    Treatment = anno_block(
+      labels = levels(column_split),
+      labels_gp = gpar(fontsize = 8, fontface = "bold"),
+      gp = gpar(fill = "#F9F8F6", col = NA)  # no colored blocks, text only
+    ),
+    which = "column",
+    show_annotation_name = FALSE,
+    height = grid::unit(5, "mm")
+  )
+  
+  ht <- Heatmap(
+    mat,
+    name = "Normalize Enrichment Score",
+    col = col_fun,
+    na_col = "transparent",
+    rect_gp = gpar(col = NA, fill = NA),      # no rectangles
+    cluster_rows = FALSE,
+    cluster_columns = FALSE,
+    
+    row_split = row_category,                 # break by general category
+    column_split = column_split,              # split into 3 treatment blocks
+    
+    show_row_dend = FALSE,
+    show_column_dend = FALSE,
+    
+    row_names_side = "left",
+    row_names_gp = gpar(fontsize = 9),
+    
+    column_names_gp = gpar(fontsize = 9),
+    column_title = NULL,
+    row_title = NULL,
+    
+    row_gap = unit(0, "mm"),
+    column_gap = unit(1, "mm"),
+    
+    top_annotation = ha_top,
+    border_gp = gpar(col = "grey60", lwd = 0.5),
+    heatmap_legend_param = list(
+      direction = "horizontal",
+      title_position = "topcenter",
+      title_gp  = grid::gpar(fontsize = 8,fontface="bold")
+    ),
+    
+    
+    layer_fun = function(j, i, x, y, w, h, fill) {
+      
+      idx <- cbind(i, j)
+      
+      v  <- mat[idx]       # NES values for exactly those cells
+      rr <- size01[idx]    # size values for exactly those cells
+      
+      ok <- !is.na(v)
+      if (!any(ok)) return()
+      
+      m <- grid::unit.pmin(w, h)
+      
+      # radius: choose a max fraction of cell size
+      min_r <- unit(0.4, "mm")
+      r <- m * 0.5 * sqrt(rr)
+      r <- grid::unit.pmax(r, min_r)
+      
+      grid::grid.circle(
+        x[ok], y[ok],
+        r = r[ok],
+        gp = grid::gpar(
+          fill = col_fun(v[ok]),     # signed NES -> color
+          col  = "#bdbdbd",
+          lwd  = 0.4,
+          alpha = 0.9
+        )
+      )
+    }
+  )
+  
+  ht_drawn<-draw(
+    ht + ha_row,
+    heatmap_legend_side = "bottom",
+    annotation_legend_side = "bottom",
+    merge_legends = TRUE,          # <- important
+    padding = unit(c(0, 15,0,0), "mm")
+  )
+  
+  ht_gg <- as.ggplot(function() draw(ht_drawn))  +
+    theme(plot.margin = margin(0, 0, 0, 0))
+  
+  return(ht_gg)
+}
+plot_pathway_dotplot <- function(gsea_all,category_sort=NULL){
+ 
   
   gsea_all <- gsea_all %>% filter(padj<0.05) %>% 
     mutate(label=paste0(pathway," (",ID,")"),
-           time_point = factor(time_point, levels = c("1h", "4h", "24h"))) %>% 
-    arrange(treatment,NES)%>% mutate(porder=row_number())
+           time_point = factor(time_point, levels = c("1h", "4h", "24h")),
+           treatment = factor(treatment,levels=c("Antibiotic","Phage","Antibiotic + Phage")))
+  if(is.null(category_sort)){ 
+   gsea_all <- gsea_all %>% arrange(treatment,NES)%>% mutate(porder=row_number())
+  } else{
+    
+    gsea_all <- gsea_all %>% merge(category_sort,by="pathway",all.x=T) %>%
+      arrange(category,NES) %>% 
+      mutate(porder=row_number())
+
+    cat_blocks <- gsea_all %>%
+      distinct(category, porder, pathway) %>%
+      group_by(category) %>%
+      summarise(
+        ymin = min(porder) - 0.5,
+        ymax = max(porder) + 0.5,
+        ymid = (ymin + ymax)/2,
+        .groups = "drop"
+      )
+    print(cat_blocks)
+  }
   
   pkegg <- ggplot(gsea_all, aes(y = reorder(label,porder), x = time_point)) +
+
     geom_point(aes(size  = abs(NES),fill=NES),color = "#bdbdbd",shape =21, alpha =0.8) +
-    facet_grid(.~treatment)+
+    facet_grid(category~treatment,scales = "free")+
     scale_fill_gradient2(low = "#1746A2",mid = "#F5F5F0",high = "#C40C0C",
                          midpoint = 0,name = "Entrichment Direction") +
     scale_size_continuous(range = c(2, 8),name = "Enrichment Strength") +
     scale_y_discrete(position = "right")+
     labs(x="Time point",y="KEGG Pathway")+
-    theme_bw()+
+    coord_cartesian(clip = "off") +    
+    theme_minimal()+
     theme(
           axis.title=element_text(size=10),
           axis.text.x = element_text(size = 10),

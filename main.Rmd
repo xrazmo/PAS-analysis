@@ -46,23 +46,30 @@ metadata_filt$ab_conc <- droplevels(metadata_filt$ab_conc)
 
 
 ```{r load-data-models, eval=FALSE}
+
+models_outs <- file.path(out_dir,"model_out")
+
 for (t in c("1h","4h","24h")){
   
   message(paste("--Identifying DEGs for: ", t))
   deseq_results <- run_DESeq2_sva(counts_filt, metadata_filt,formula_str = "~ ab_conc * phage", 
                              time_point = t)
    run_lfcShrink(deseq_results$dds, coef_name = "ab_conc_4_vs_0", annotation=annotation,
-                          out_file = paste0(out_dir,"venn_degs_",t,"_phage0-ab4.csv"),LFC=1,padj = 0.05)
+                          out_file = paste0(models_outs,"/venn_degs_",t,"_phage0-ab4.csv"),LFC=1,padj = 0.05)
    run_lfcShrink(deseq_results$dds, coef_name = "phage_1_vs_0", annotation=annotation,
-                          out_file = paste0(out_dir,"venn_degs_",t,"_phage1-ab0.csv"), LFC=1,padj = 0.05)
+                          out_file = paste0(models_outs,"/venn_degs_",t,"_phage1-ab0.csv"), LFC=1,padj = 0.05)
   
   run_lfcShrink(deseq_results$dds, coef_name = "ab_conc_4_vs_0", annotation=annotation,
-                          out_file = paste0(out_dir,"all_genes_",t,"_phage0-ab4.csv"))
+                          out_file = paste0(models_outs,"/all_genes_",t,"_phage0-ab4.csv"))
   run_lfcShrink(deseq_results$dds, coef_name = "phage_1_vs_0", annotation=annotation,
-                          out_file = paste0(out_dir,"all_genes_",t,"_phage1-ab0.csv"))
-  
+                          out_file = paste0(models_outs,"/all_genes_",t,"_phage1-ab0.csv"))
+  #interaction
   run_lfcShrink(deseq_results$dds, coef_name = "ab_conc4.phage1", annotation=annotation,
-                          out_file = paste0(out_dir,"/interaction/all_genes_",t,"_abconc4.phage1.csv"))
+                          out_file = paste0(models_outs,"/all_genes_",t,"_abconc4.phage1.csv"))
+  #combo ab+phage
+  run_lfcShrink(deseq_results$dds, contrast_c=c( "ab_conc_4_vs_0","phage_1_vs_0", "ab_conc4.phage1")
+                          , annotation=annotation,
+                          out_file = paste0(models_outs,"/combo_",t,"_abconc4.phage1.csv"))
       
 }
 
@@ -72,30 +79,51 @@ for (t in c("1h","4h","24h")){
 
 ```{r}
 #saves the file in export
-run_gsea_venn("./export/")
+
+run_gsea_base("./export/model_out","./export/kegg_gsea")
  
 ```
+
+```{r}
+
+source("transcriptomics_functions.R")
+gsea_all <- read.csv('./export/kegg_gsea/gsea_all_3_cat.csv')
+pathway_category <- read.csv('./export/kegg_gsea/pathway_category.csv')
+plot_pathway_dotplot(gsea_all,pathway_category) 
+
+
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+
+
+
+```
+
 
 
 
 ```{r}
 library(patchwork)
-source("transcriptomics_functions.R")
+library(ggplotify)
 
-pvenn_res <- plot_venn_diagram('./export/')
+source("transcriptomics_functions.R")
+pvenn_res <- plot_venn_diagram('./export/model_out/')
 write.csv(pvenn_res$count,"./export/count_venn_diagram.csv")
 ppcoa_res <- plot_pcoa(counts_filt,metadata_filt)
 
-gsea_all <- read.csv('./export/gsea_all_venn.csv')
-pgsea <- plot_pathway_dotplot(gsea_all)
+gsea_all <- read.csv('./export/kegg_gsea/gsea_all_3_cat.csv')
+pathway_category <- read.csv('./export/kegg_gsea/pathway_category.csv')
+pgsea <- plot_gsea_heatmap(gsea_all, pathway_category)
 
-pgsea <- pgsea + theme(legend.position = c(0.9, 1.06))
-ppcoa <- ppcoa_res$fig+ theme(legend.position="top")
+ppcoa <- ppcoa_res$fig
+p<- ( ppcoa /  pvenn_res$fig) + plot_layout(heights = c(0.8, 1.2))
+(p | pgsea) + plot_layout(widths = c(0.9, 1.1),heights = c(1,1)) + plot_annotation(tag_levels = 'A')
 
-p<- ( ppcoa /  pvenn_res$fig) + plot_layout(heights = c(0.8, 1.2),widths = c(0.5,1.5))
-(p|pgsea) + plot_layout(widths = c(1.4, .6)) + plot_annotation(tag_levels = 'A')
+ggsave('./figures/pcoa_venn_heatmap.pdf',device='pdf',height = 10,width = 10)
 
-ggsave('./figures/pcoa_venn_dotplot.pdf',device='pdf',height = 10,width = 12)
 ```
 
 
@@ -106,6 +134,7 @@ ggsave('./figures/pcoa_venn_dotplot.pdf',device='pdf',height = 10,width = 12)
 df_response <- assess_interactions(in_dir="./export/interaction/",
                                   out_dir = "./export/interaction/",
                                    annotation = annotation)
+
 
 ```
 
@@ -139,7 +168,115 @@ p  +  plot_layout(guides = 'collect') & theme(legend.position = 'bottom')
 
 ggsave("./figures/response_classes_3.pdf",device = "pdf", width = 12,height = 10)
 ```
+#combo additive dig
 
+```{r}
+pathway_gene_sets <- list(
+  Divisome = c("mraZ","ftsA","ftsB","ftsE","ftsH","ftsI","ftsK","ftsL","ftsN","ftsP","ftsQ","ftsW","ftsX","ftsY","ftsZ"),
+  Peptidoglycan = c("murA","murB","murC","murD","murE","murF","murG","murI","mraY","murJ","murP","murQ","murR","ampG"),
+  Bam_OM_assembly = c("bamA","bamB","bamC","bamD","bamE","surA","skp","degP","spy","dsbA","dsbC","dsbG","fkpA"),
+  Lpt_LPS_transport = c("lptA","lptB","lptC","lptD","lptE","lptF","lptG"),
+  Waa_LPS_core = c("waaA","waaC","waaF","waaG","waaH","waaP","waaQ"),
+  Capsule_Oantigen_export = c("wza","wzc","wzxC","wzyE","wzxE"),
+  Porins = c("ompA","ompC","ompF","ompG","ompL","ompN","ompW","ompX","ompR","envZ"),
+  Efflux = c("acrA","acrB","tolC","acrZ","acrD","acrE","acrF","acrR",
+             "mdtA","mdtB","mdtC","mdtD","mdtE","mdtF","mdtG","mdtH","mdtI","mdtJ","mdtK","mdtL","mdtN","mdtO","mdtP"),
+  Efflux_regulators = c("marA","marR","marB","marC","soxS","soxR","rob"),
+  Envelope_stress = c("pspA","pspB","pspC","pspD","pspE","pspG","cpxA","cpxR","cpxP","rpoE","rseA","rseB","degP"),
+  SOS_DNA_damage = c("recA","lexA","sulA","umuD","umuC","dinB","polB","dinI",
+                     "uvrA","uvrB","uvrC","uvrD",
+                     "recB","recC","recD","recF","recO","recR","recN","recX",
+                     "ruvA","ruvB","ruvC",
+                     "mutS","mutL","mutH","ssb","xthA","nfo","sbcC","sbcD")
+)
+df_category  <- pathway_gene_sets |>
+    tibble::enframe(name = "group", value = "gene_name") |>
+    tidyr::unnest(gene_name)
+```
+
+```{r}
+  standardize_gene_col <- function(df) {
+    # Common DESeq2 csv patterns: gene, Gene, rownames stored as X or Row.names
+    gene_candidates <- c("gene", "Gene", "ID", "Row.names", "row.names", "X", "X1")
+    found <- gene_candidates[gene_candidates %in% colnames(df)]
+    if (length(found) == 0) {
+      stop("Could not find a gene column in input. Columns: ", paste(colnames(df), collapse=", "))
+    }
+    gene_col <- found[1]
+    df <- df %>% dplyr::rename(gene = !!gene_col)
+    df
+  }
+  
+  prep_res <- function(df, prefix) {
+    df <- standardize_gene_col(df)
+    
+    req <- c("gene", "log2FoldChange", "padj")
+    missing <- setdiff(req, colnames(df))
+    if (length(missing) > 0) {
+      stop("Missing required columns: ", paste(missing, collapse=", "),
+           " in file with prefix ", prefix)
+    }
+    
+    df %>%
+      dplyr::select(gene, log2FoldChange, padj) %>%
+      # enforce 1 row per gene (protect against prior merges/duplicates)
+      dplyr::group_by(gene) %>%
+      dplyr::slice(1) %>%
+      dplyr::ungroup() %>%
+      dplyr::rename(
+        !!paste0("lfc_", prefix) := log2FoldChange,
+        !!paste0("padj_", prefix) := padj
+      )
+  }
+  
+  
+t<- "4h"
+in_dir = "./export/interaction/"
+
+f_phage <- file.path(in_dir, paste0("all_genes_", t, "_phage1-ab0.csv"))
+f_ab <- file.path(in_dir, paste0("all_genes_", t, "_phage0-ab4.csv"))
+f_int <- file.path(in_dir, paste0("all_genes_", t, "_abconc4.phage1.csv"))
+f_combo <- file.path(in_dir, paste0("combo_", t, "_abconc4.phage1.csv"))
+
+res_phage <- read.csv(f_phage, stringsAsFactors = FALSE, check.names = FALSE)
+res_ab    <- read.csv(f_ab,    stringsAsFactors = FALSE, check.names = FALSE)
+res_int   <- read.csv(f_int,   stringsAsFactors = FALSE, check.names = FALSE)
+res_combo   <- read.csv(f_combo,   stringsAsFactors = FALSE, check.names = FALSE)
+
+phage_short <- prep_res(res_phage, "phage")
+ab_short    <- prep_res(res_ab,    "ab")
+int_short   <- prep_res(res_int,   "interaction")
+combo_short <- prep_res(res_combo,   "combo")
+
+res_all <- phage_short %>%
+  full_join(ab_short, by = "gene") %>%
+  full_join(int_short, by = "gene")%>%
+  full_join(combo_short, by = "gene")
+
+ res_all <- res_all %>%
+      mutate(
+        sig_phage = !is.na(padj_phage) & padj_phage < 0.05 & abs(lfc_phage) > 1,
+        sig_ab    = !is.na(padj_ab)    & padj_ab    < 0.05 & abs(lfc_ab) > 1,
+        sig_interaction = !is.na(padj_interaction) & padj_interaction < 0.05 &
+          abs(lfc_interaction) > 1,
+        
+        response_class = case_when(
+          sig_interaction & !sig_ab & !sig_phage ~ "Combination-specific",
+          sig_interaction & sig_ab & !sig_phage  ~ "Antibiotic-amplified-by-phage",
+          sig_interaction & !sig_ab & sig_phage  ~ "Phage-modified-by-antibiotic",
+          sig_ab & sig_phage & sig_interaction   ~ "General stress",
+          sig_ab & sig_phage & !sig_interaction  ~ "Additive (no interaction)",
+          sig_ab & !sig_phage & !sig_interaction ~ "Antibiotic-only",
+          sig_phage & !sig_ab & !sig_interaction ~ "Phage-only",
+          TRUE                                   ~ "No significant change"
+        )
+      ) 
+ 
+res_additive <- res_all %>% filter(response_class=="Additive (no interaction)") %>%
+      left_join(annotation, by = c("gene" = "ID"))%>%
+      left_join(df_category, by = c("gene.y" = "gene_name")) %>% select(c(colnames(res_all),"gene.y","group"))
+write.csv(res_additive,'./export/_temp_additive_pathways_abphaintercombo.csv')
+```
 
 
 
