@@ -120,9 +120,10 @@ pgsea <- plot_gsea_heatmap(gsea_all, pathway_category)
 
 ppcoa <- ppcoa_res$fig
 p<- ( ppcoa /  pvenn_res$fig) + plot_layout(heights = c(0.8, 1.2))
-(p | pgsea) + plot_layout(widths = c(0.9, 1.1),heights = c(1,1)) + plot_annotation(tag_levels = 'A')
+(p | pgsea) + plot_layout(widths = c(0.8, 1.2),heights = c(1,1)) + plot_annotation(tag_levels = 'A') & 
+  theme(plot.tag = element_text(size = 10,face="bold"))
 
-ggsave('./figures/pcoa_venn_heatmap.pdf',device='pdf',height = 10,width = 10)
+ggsave('./figures/pcoa_venn_heatmap.pdf',device='pdf',height = 11,width = 12)
 
 ```
 
@@ -131,12 +132,132 @@ ggsave('./figures/pcoa_venn_heatmap.pdf',device='pdf',height = 10,width = 10)
 ## combo vs mono therapy
 ```{r}
 
-df_response <- assess_interactions(in_dir="./export/interaction/",
+df_response <- assess_interactions(in_dir="./export/model_out//",
                                   out_dir = "./export/interaction/",
                                    annotation = annotation)
 
 
 ```
+```{r}
+rm(list=ls())
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggsankey)
+
+df_gene <- read.csv("./export/interaction/combo_therapy_responses.csv")
+# ==========================================================
+# TRUE GENE TRANSITION SANKEY (1h → 4h → 24h) with visible 24h nodes
+# ==========================================================
+
+# -------- PARAMETERS --------
+tp_levels <- c("1h", "4h", "24h", "END")   # END is hidden stage
+classes_levels <- c("No significant change","General stress","Antibiotic-only","Phage-only",
+                    "Additive (no interaction)","Phage-modified-by-antibiotic","Antibiotic-amplified-by-phage","Combination-specific")
+nochange_label <- "No significant change"
+
+# -------- INPUT --------
+# df_gene must have columns: gene, time_point, response_class
+
+# -------- 1) COMPLETE GENE × TIME GRID (fill missing with No change) --------
+df_long_full <- df_gene %>%
+  mutate(time_point = factor(time_point, levels = tp_levels[1:3])) %>%
+  complete(gene, time_point, fill = list(response_class = nochange_label)) %>%
+  group_by(gene, time_point) %>%
+  summarise(response_class = first(response_class), .groups = "drop")
+
+# -------- 2) WIDE FORMAT --------
+df_wide <- df_long_full %>%
+  pivot_wider(names_from = time_point, values_from = response_class)
+
+# -------- 3) REMOVE GENES ALWAYS NO CHANGE --------
+df_wide <- df_wide %>%
+  filter(!if_all(all_of(tp_levels[1:3]), ~ .x == nochange_label))
+
+# -------- 4) BUILD TRANSITIONS (1h→4h and 4h→24h) --------
+edges_1 <- df_wide %>%
+  count(`1h`, `4h`, name = "value") %>%
+  rename(node = `1h`, next_node = `4h`) %>%
+  mutate(x = "1h", next_x = "4h")
+
+edges_2 <- df_wide %>%
+  count(`4h`, `24h`, name = "value") %>%
+  rename(node = `4h`, next_node = `24h`) %>%
+  mutate(x = "4h", next_x = "24h")
+
+edges <- bind_rows(edges_1, edges_2) %>%
+  filter(value > 0) %>%
+  mutate(
+    x = factor(x, levels = tp_levels),
+    next_x = factor(next_x, levels = tp_levels),
+    node = as.character(node),
+    next_node = as.character(next_node)
+  )
+
+# -------- 5) ADD OUTGOING EDGES FROM 24h TO END (forces 24h nodes) --------
+edges_end <- edges %>%
+  filter(next_x == "24h") %>%
+  group_by(next_node) %>%
+  summarise(value = sum(value), .groups = "drop") %>%
+  transmute(
+    x = factor("24h", levels = tp_levels),
+    next_x = factor("END", levels = tp_levels),
+    node = as.character(next_node),
+    next_node = "__END__",      # sink node label
+    value = value
+  )
+
+edges_plot <- bind_rows(edges, edges_end)
+
+edges_plot <- edges_plot %>%
+  mutate(
+    node = factor(node, levels = classes_levels),
+    next_node = factor(next_node, levels = c(classes_levels, "__END__"))
+  )
+
+# -------- 6) COLORS (make sink transparent) --------
+
+class_cols <- c("No significant change"="#FFE797",
+                "General stress" = "#0ABAB5",
+                "Antibiotic-only"="#FF6500","Phage-only"="#008BFF",
+                  "Additive (no interaction)"="#C40C0C",
+                "Phage-modified-by-antibiotic"="#6E026F",
+                "Antibiotic-amplified-by-phage"="#0D1164",
+                "Combination-specific"="#005F02",
+                "__END__"="transparent")
+
+# -------- 7) PLOT --------
+ggplot(edges_plot,
+            aes(x = x, next_x = next_x,
+                node = node, next_node = next_node,
+                value = value,
+                fill = node)) +
+  geom_sankey(flow.alpha = 0.6, node.color = NULL) +
+  scale_fill_manual(values = class_cols, breaks = setdiff(names(class_cols), "__END__")) +
+  scale_x_discrete(
+    labels = c("1h" = "1h", "4h" = "4h", "24h" = "24h"),
+    expand = expansion(add = c(0.1, 0.1)) # reduce space between legend and plot
+  ) +
+  labs(x="Time Point", y= "")+
+  theme_sankey() +
+  theme(axis.text.x = element_text(size=12),
+        #legend.position = c(0.4, 0.99),
+        #legend.justification = c(1, 1),
+        legend.position = "top",
+        #legend.direction = "horizontal",
+        legend.title = element_text(hjust = 0.5,size=9,face = "bold"),
+        legend.text = element_text(size=9),
+        legend.margin = margin(t = 3, r = 0, b = 3, l = 0, unit = "pt"),
+        margins =margin(t = 0, r = 0, b = 0, l = 0, unit = "pt"),
+        panel.grid.major.x = element_line(linetype='longdash',size=.3,color="gray80")) +
+  guides(fill = guide_legend(title = "Response Classes",
+                             ncol=4,title.position = "top"))
+
+
+ggsave("./figures/response_classes_snakey.pdf",device='pdf',width=8,height = 7)
+
+```
+
 
 ```{r}
 
