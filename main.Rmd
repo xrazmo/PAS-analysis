@@ -10,6 +10,7 @@ output: html_document
 ```{r load-libraries}
 rm(list=ls())
 library(tidyverse)
+library(dplyr)
 library(readxl)
 library(DESeq2)
 library(sva)
@@ -293,18 +294,18 @@ ggsave("./figures/response_classes_3.pdf",device = "pdf", width = 12,height = 10
 
 ```{r}
 pathway_gene_sets <- list(
-  Divisome = c("mraZ","ftsA","ftsB","ftsE","ftsH","ftsI","ftsK","ftsL","ftsN","ftsP","ftsQ","ftsW","ftsX","ftsY","ftsZ"),
-  Peptidoglycan = c("murA","murB","murC","murD","murE","murF","murG","murI","mraY","murJ","murP","murQ","murR","ampG"),
-  Bam_OM_assembly = c("bamA","bamB","bamC","bamD","bamE","surA","skp","degP","spy","dsbA","dsbC","dsbG","fkpA"),
-  Lpt_LPS_transport = c("lptA","lptB","lptC","lptD","lptE","lptF","lptG"),
-  Waa_LPS_core = c("waaA","waaC","waaF","waaG","waaH","waaP","waaQ"),
-  Capsule_Oantigen_export = c("wza","wzc","wzxC","wzyE","wzxE"),
+  `Cell division` = c("mraZ","ftsA","ftsB","ftsE","ftsH","ftsI","ftsK","ftsL","ftsN","ftsP","ftsQ","ftsW","ftsX","ftsY","ftsZ"),
+  `Peptidoglycan biosynthesis/recycling` = c("murA","murB","murC","murD","murE","murF","murG","murI","mraY","murJ","murP","murQ","murR","ampG"),
+  `Bam complex/OM assembly` = c("bamA","bamB","bamC","bamD","bamE","surA","skp","spy","dsbA","dsbC","dsbG","fkpA"),
+  `LPS transport` = c("lptA","lptB","lptC","lptD","lptE","lptF","lptG"),
+  `LPS core biosynthesis` = c("waaA","waaC","waaF","waaG","waaH","waaP","waaQ"),
+  `Capsule / O-antigen transport` = c("wza","wzc","wzxC","wzyE","wzxE"),
   Porins = c("ompA","ompC","ompF","ompG","ompL","ompN","ompW","ompX","ompR","envZ"),
   Efflux = c("acrA","acrB","tolC","acrZ","acrD","acrE","acrF","acrR",
              "mdtA","mdtB","mdtC","mdtD","mdtE","mdtF","mdtG","mdtH","mdtI","mdtJ","mdtK","mdtL","mdtN","mdtO","mdtP"),
-  Efflux_regulators = c("marA","marR","marB","marC","soxS","soxR","rob"),
-  Envelope_stress = c("pspA","pspB","pspC","pspD","pspE","pspG","cpxA","cpxR","cpxP","rpoE","rseA","rseB","degP"),
-  SOS_DNA_damage = c("recA","lexA","sulA","umuD","umuC","dinB","polB","dinI",
+  `Efflux regulators` = c("marA","marR","marB","marC","soxS","soxR","rob"),
+  `Envelope stress response` = c("pspA","pspB","pspC","pspD","pspE","pspG","cpxA","cpxR","cpxP","rpoE","rseA","rseB","degP"),
+  `SOS DNA damage` = c("recA","lexA","sulA","umuD","umuC","dinB","polB","dinI",
                      "uvrA","uvrB","uvrC","uvrD",
                      "recB","recC","recD","recF","recO","recR","recN","recX",
                      "ruvA","ruvB","ruvC",
@@ -316,6 +317,8 @@ df_category  <- pathway_gene_sets |>
 ```
 
 ```{r}
+library(readr)
+
   standardize_gene_col <- function(df) {
     # Common DESeq2 csv patterns: gene, Gene, rownames stored as X or Row.names
     gene_candidates <- c("gene", "Gene", "ID", "Row.names", "row.names", "X", "X1")
@@ -352,52 +355,187 @@ df_category  <- pathway_gene_sets |>
   
   
 t<- "4h"
-in_dir = "./export/interaction/"
+in_dir = "./export/model_out/"
+results = list()
+for( t in c("1h","4h","24h")){
+  f_phage <- file.path(in_dir, paste0("all_genes_", t, "_phage1-ab0.csv"))
+  f_ab <- file.path(in_dir, paste0("all_genes_", t, "_phage0-ab4.csv"))
+  f_int <- file.path(in_dir, paste0("all_genes_", t, "_abconc4.phage1.csv"))
+  f_combo <- file.path(in_dir, paste0("combo_", t, "_abconc4.phage1.csv"))
+  
+  res_phage <- read_csv(f_phage, show_col_types = FALSE)
+  res_ab    <- read_csv(f_ab,   show_col_types = FALSE)
+  res_int   <- read_csv(f_int,   show_col_types = FALSE)
+  res_combo   <- read_csv(f_combo,   show_col_types = FALSE)
+  
+  phage_short <- prep_res(res_phage, "phage")
+  ab_short    <- prep_res(res_ab,    "ab")
+  int_short   <- prep_res(res_int,   "interaction")
+  combo_short <- prep_res(res_combo,   "combo")
+  
+  annot <- annotation %>% select(ID,gene) %>% rename("gene_name"="gene","gene"="ID")
+  res_all <- phage_short %>%
+    full_join(ab_short, by = "gene") %>%
+    full_join(int_short, by = "gene")%>%
+    full_join(combo_short, by = "gene") %>% 
+    merge(annot,by = "gene",all.x=T)
+  
+  results[[t]] <- res_all
+  
+}
 
-f_phage <- file.path(in_dir, paste0("all_genes_", t, "_phage1-ab0.csv"))
-f_ab <- file.path(in_dir, paste0("all_genes_", t, "_phage0-ab4.csv"))
-f_int <- file.path(in_dir, paste0("all_genes_", t, "_abconc4.phage1.csv"))
-f_combo <- file.path(in_dir, paste0("combo_", t, "_abconc4.phage1.csv"))
-
-res_phage <- read.csv(f_phage, stringsAsFactors = FALSE, check.names = FALSE)
-res_ab    <- read.csv(f_ab,    stringsAsFactors = FALSE, check.names = FALSE)
-res_int   <- read.csv(f_int,   stringsAsFactors = FALSE, check.names = FALSE)
-res_combo   <- read.csv(f_combo,   stringsAsFactors = FALSE, check.names = FALSE)
-
-phage_short <- prep_res(res_phage, "phage")
-ab_short    <- prep_res(res_ab,    "ab")
-int_short   <- prep_res(res_int,   "interaction")
-combo_short <- prep_res(res_combo,   "combo")
-
-res_all <- phage_short %>%
-  full_join(ab_short, by = "gene") %>%
-  full_join(int_short, by = "gene")%>%
-  full_join(combo_short, by = "gene")
-
- res_all <- res_all %>%
-      mutate(
-        sig_phage = !is.na(padj_phage) & padj_phage < 0.05 & abs(lfc_phage) > 1,
-        sig_ab    = !is.na(padj_ab)    & padj_ab    < 0.05 & abs(lfc_ab) > 1,
-        sig_interaction = !is.na(padj_interaction) & padj_interaction < 0.05 &
-          abs(lfc_interaction) > 1,
-        
-        response_class = case_when(
-          sig_interaction & !sig_ab & !sig_phage ~ "Combination-specific",
-          sig_interaction & sig_ab & !sig_phage  ~ "Antibiotic-amplified-by-phage",
-          sig_interaction & !sig_ab & sig_phage  ~ "Phage-modified-by-antibiotic",
-          sig_ab & sig_phage & sig_interaction   ~ "General stress",
-          sig_ab & sig_phage & !sig_interaction  ~ "Additive (no interaction)",
-          sig_ab & !sig_phage & !sig_interaction ~ "Antibiotic-only",
-          sig_phage & !sig_ab & !sig_interaction ~ "Phage-only",
-          TRUE                                   ~ "No significant change"
-        )
-      ) 
+df_results <- results |>
+    tibble::enframe(name = "time_point", value = "response_data") |>
+    tidyr::unnest(response_data)
  
-res_additive <- res_all %>% filter(response_class=="Additive (no interaction)") %>%
-      left_join(annotation, by = c("gene" = "ID"))%>%
-      left_join(df_category, by = c("gene.y" = "gene_name")) %>% select(c(colnames(res_all),"gene.y","group"))
-write.csv(res_additive,'./export/_temp_additive_pathways_abphaintercombo.csv')
+res_sel <- df_results %>% merge(df_category,by='gene_name')
+
 ```
+
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+library(dplyr)
+library(tidyr)
+library(RColorBrewer)
+library(ggplotify)
+# Mask non-significant values → set to NA where padj >= 0.05
+sig_df <- res_sel %>%
+  mutate(
+    lfc_ab_sig         = if_else(padj_ab < 0.05,         lfc_ab,         NA_real_),
+    lfc_phage_sig      = if_else(padj_phage < 0.05,      lfc_phage,      NA_real_),
+    lfc_interaction_sig = if_else(padj_interaction < 0.05, lfc_interaction, NA_real_),
+    lfc_combo_sig      = if_else(padj_combo < 0.05,      lfc_combo,      NA_real_)
+   ) %>%
+  # Select only the sig columns + identifiers
+  select(time_point,gene_name, group, ends_with("_sig")) %>%
+  distinct() %>%
+  filter(
+    !if_all(starts_with("lfc_"), is.na)
+  ) %>%
+  pivot_wider(
+    names_from = c(time_point),
+    values_from = ends_with("_sig"),
+    names_sep = "_",
+    values_fill = NA_real_
+  ) %>% arrange(group)
+
+mat <- sig_df %>%
+  column_to_rownames("gene_name") %>%
+  select(starts_with("lfc_")) %>%   # only the LFC sig columns
+  as.matrix()
+
+
+col_info <- data.frame(
+  col_name = colnames(mat),
+  time_point = sub(".*_(1h|4h|24h)$", "\\1", colnames(mat)),
+  contrast   = sub("lfc_(.*?)_sig_.*", "\\1", colnames(mat))
+) %>%
+  mutate(
+    time_point = factor(time_point, levels = c("1h", "4h", "24h")),
+    contrast   = factor(contrast, 
+                        levels = c("ab", "phage", "combo", "interaction"))
+  )
+
+ordered_col <- order(col_info$time_point, col_info$contrast)
+mat_sorted <- mat[, col_info$col_name[ordered_col]]
+
+colnames(mat_sorted) <- sub("^lfc_(.*?)_sig_(.*)$", "\\1", colnames(mat_sorted)) %>%
+  str_to_title() %>%                             # Ab
+  str_replace("Ab", "Antibiotic only") %>% 
+  str_replace("Phage", "Phage only")%>% 
+  str_replace("Combo", "Antibiotic + Phage") %>% 
+  str_replace("Interaction", "Interaction")          
+
+# Row split vector (must match row order of mat)
+row_split <- sig_df %>%
+  distinct(gene_name, group) %>%
+  right_join(tibble(gene_name = rownames(mat_sorted)), by = "gene_name") %>% 
+  arrange(match(gene_name, rownames(mat_sorted))) %>%
+  pull(group)
+
+
+unique_groups <- unique(row_split)
+n_groups <- length(unique_groups)
+
+g_colors <- brewer.pal(length(unique_groups), name = "Set3")
+group_colors <- setNames(g_colors,unique_groups)
+
+wrapped_labels <- sapply(unique_groups, function(txt) {
+  # Simple wrap: break after ~15–20 chars or at space
+  paste(strwrap(txt, width = 20), collapse = "\n")
+})
+
+row_anno <- rowAnnotation(
+  gene_group = anno_block(
+    gp = gpar(fill = group_colors,alpha=0.4),
+   width = max_text_width(wrapped_labels) + unit(2, "mm"),
+    labels = wrapped_labels,
+    labels_gp = gpar(col = "#37353E", fontsize = 6, fontface = "bold"),
+    labels_rot = 0,
+  ),
+
+  show_annotation_name = FALSE
+)
+
+max_lfc <- max(abs(mat_sorted), na.rm = TRUE)
+col_fun <- colorRamp2(c(-5,-4,-0.5,0,0.5,4,5),
+                      c("#001BB7","#0046FF","#008BFF","#FFD150","#FF9B00","#F63049","#740A03"))
+
+ht <- Heatmap(
+  mat_sorted,
+  name = "LFCs",
+  col = col_fun,
+  na_col = "#F5F5F0",
+  
+  row_split = row_split,
+  row_names_side = "left",
+  cluster_row_slices = FALSE,     
+  cluster_rows = FALSE, 
+  right_annotation = row_anno,
+  row_names_gp = gpar(fontsize = 5,fontface='italic'),
+  row_title = NULL,
+  row_gap = unit(1, "mm"),
+  row_names_rot = 0,
+  # === Column split by time_point ===
+  column_split = col_info$time_point[ordered_index],
+  cluster_columns = FALSE,
+  cluster_column_slices = FALSE,
+  column_title = levels(col_info$time_point),
+  column_title_gp = gpar(fontsize = 8, fontface = "bold"),
+  column_names_side = "bottom",
+  column_names_rot =-90,
+  column_names_gp = gpar(fontsize = 7),
+  
+  rect_gp = gpar(col = "grey50", lwd = 0.5),
+  
+  heatmap_legend_param = list(
+    title = "Log2(Fold Change)",
+    direction = "horizontal",
+    title_position = "lefttop",
+    title_gp = gpar(fontsize = 7),
+    labels_gp = gpar(fontsize = 7),
+    #at = c(-5,-2,-1,0,1,2,5),  
+    #labels = c(-5,-2,-1,0,1,2,5)
+  )
+)
+#   +
+#   rowAnnotation(link = anno_mark(at = c(1:length(rownames(mat_sorted))) , 
+#         labels = rownames(mat_sorted), 
+#         labels_gp = gpar(fontsize = 7), padding = unit(0.5, "mm"))
+# )
+
+
+# 4. Draw the heatmap
+ht_drawn <- draw(ht, heatmap_legend_side = "bottom", padding = unit(c(2, 2, 2, 2), "mm"))
+
+ht_gg <- as.ggplot(function() draw(ht_drawn))  
+
+ggsave("./figures/heatmap_atm_groups.pdf",ht_gg,device='pdf', width = 5,height = 10)
+
+write.csv(sig_df[,c("gene_name","group",col_info$col_name[ordered_col])],"./export/__LFC_heatmap_data.csv")
+```
+
 
 
 
