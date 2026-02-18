@@ -133,6 +133,7 @@ ggsave('./figures/pcoa_venn_heatmap.pdf',device='pdf',height = 11,width = 12)
 ## combo vs mono therapy
 ```{r}
 
+source("transcriptomics_functions.R")
 df_response <- assess_interactions(in_dir="./export/model_out//",
                                   out_dir = "./export/interaction/",
                                    annotation = annotation)
@@ -261,12 +262,275 @@ ggsave("./figures/response_classes_snakey.pdf",device='pdf',width=8,height = 7)
 
 
 ```{r}
+library(patchwork)
+library(ggh4x)
+plot_combo_response_chicklets <- function(
+  data_path,
+  data = NULL,
+  response_class,
+  gene_category_path,
+  gene_category = NULL,
+  label_font_pt = 9,
+  label_color = "#435663",
+  color_set = c(phage = "#A0C878", ab = "#6BC5D2", combo = "#F564A9",
+                pos_inter = "#D32D2D", neg_inter = "#3A9AFF"),
+  label_set = c(ab = "Antibiotic Only", phage = "Phage Only",
+                combo = "Antibiotic + Phage",
+                neg_inter = "Negative Interaction",
+                pos_inter = "Positive Interaction"),
+  padj_cutoff = 0.05,
+  data_cols = c("lfc_ab", "lfc_phage", "lfc_combo", "lfc_interaction"),
+  widths = c(4, 2),
+  legend_position = "bottom",
+  legend_nrow = 1,
+  legend_spacing_mm = 1,
+  facet_ncol = 1,
+  tag = tag
+) {
+  # ---- deps (no attach) ----
+  stopifnot(requireNamespace("dplyr", quietly = TRUE))
+  stopifnot(requireNamespace("tidyr", quietly = TRUE))
+  stopifnot(requireNamespace("ggplot2", quietly = TRUE))
+  stopifnot(requireNamespace("readr", quietly = TRUE))
+  stopifnot(requireNamespace("ggtext", quietly = TRUE))
+  stopifnot(requireNamespace("xfun", quietly = TRUE))
+  stopifnot(requireNamespace("grid", quietly = TRUE))
+  stopifnot(requireNamespace("patchwork", quietly = TRUE))
+  stopifnot(requireNamespace("ggh4x", quietly = TRUE))
+  stopifnot(requireNamespace("force_panelsizes", quietly = TRUE) ||
+              requireNamespace("lemon", quietly = TRUE) ||
+              TRUE) # only used if installed
+  # geom_chicklet package varies; keep as-is (assumes it is loaded by user)
+  if (!exists("geom_chicklet", mode = "function")) {
+    stop("geom_chicklet() not found. Load the package that provides it (e.g., ggchicklet).")
+  }
+
+  # ---- read input ----
+  if (is.null(data)) {
+    data <- readr::read_csv(data_path, show_col_types = FALSE)
+  }
+
+  if (is.null(gene_category) && !is.null(gene_category_path)) {
+    if (file.exists(gene_category_path)) {
+      gene_category <- utils::read.csv(gene_category_path)
+    } else {
+      gene_category <- NULL
+    }
+  }
+
+  # ---- filter + rename + padj-gating ----
+  df <- data %>%
+    dplyr::filter(.data$response_class == !!response_class) %>%
+    dplyr::rename(gene_name = `gene.y`) %>%
+    dplyr::mutate(
+      lfc_phage       = ifelse(.data$padj_phage       < padj_cutoff, .data$lfc_phage,       0),
+      lfc_ab          = ifelse(.data$padj_ab          < padj_cutoff, .data$lfc_ab,          0),
+      lfc_combo       = ifelse(.data$padj_combo       < padj_cutoff, .data$lfc_combo,       0),
+      lfc_interaction = ifelse(.data$padj_interaction < padj_cutoff, .data$lfc_interaction, 0)
+    )
+
+  lvls <- rev(c("ab", "phage", "combo", "pos_inter", "neg_inter", "zero_inter"))
+  filter_col <- c("gene", "gene_name", "time_point", data_cols)
+
+  # ---- pivot long ----
+  df_piv <- df %>%
+    dplyr::select(dplyr::all_of(filter_col)) %>%
+    tidyr::pivot_longer(
+      cols = dplyr::all_of(data_cols),
+      names_to = "group",
+      values_to = "LFC",
+      names_prefix = "lfc_"
+    ) %>%
+    dplyr::filter(!is.na(.data$gene_name)) %>%
+    dplyr::mutate(
+      group2 = ifelse(.data$group == "interaction", "I", "B"),
+      group = dplyr::case_when(
+        .data$group == "interaction" & .data$LFC > 0  ~ "pos_inter",
+        .data$group == "interaction" & .data$LFC < 0  ~ "neg_inter",
+        .data$group == "interaction" & .data$LFC == 0 ~ "zero_inter",
+        TRUE ~ .data$group
+      ),
+      group = factor(.data$group, levels = lvls)
+    )
+
+  # ---- labels + ordering ----
+  if (!is.null(gene_category)) {
+    df_piv <- df_piv %>%
+      merge(gene_category, by = "gene_name", all.x = TRUE) %>%
+      dplyr::arrange(.data$functional_group) %>%
+      dplyr::mutate(
+        gorder = dplyr::row_number(),
+        label = paste0(
+          "***", xfun::html_escape(.data$gene_name), "***",
+          "<span style='font-size:", label_font_pt, "pt; color:", label_color, ";'> (",
+          xfun::html_escape(.data$functional_group),
+          ")</span>"
+        )
+      )
+  } else {
+    df_piv <- df_piv %>%
+      dplyr::mutate(
+        gorder = dplyr::row_number(),
+        label = paste0("***", xfun::html_escape(.data$gene_name), "***")
+      )
+  }
+
+  # ---- panel heights ----
+  height_df <- df_piv %>%
+    dplyr::group_by(.data$time_point) %>%
+    dplyr::summarise(n_genes = dplyr::n_distinct(.data$gene), .groups = "drop") %>%
+    dplyr::mutate(height = .data$n_genes / min(.data$n_genes))
+
+  # ---- shared theme + legend guide ----
+ custome_theme <- ggplot2::theme(
+  plot.text = ggplot2::element_text(size = 9),
+  axis.title = ggplot2::element_text(size = 9),
+  axis.title.y = ggplot2::element_text(size = 9),
+  axis.title.x = ggplot2::element_text(size = 9),
+  axis.text.y = ggtext::element_markdown(size = 9),
+  axis.text.y.left = ggtext::element_markdown(size = 9),
+  axis.text.y.right = ggtext::element_markdown(size = 9),
+  plot.title = ggplot2::element_text(hjust = 0.5,size = 8,face = "bold"),
+  legend.text = ggplot2::element_text(size = 9),
+  legend.title = ggplot2::element_text(size = 9),
+  panel.grid.minor.x = ggplot2::element_blank(),
+  panel.grid.major.x = ggplot2::element_line(linetype = "dashed", linewidth = .3)
+)
+
+
+  legend_guide <- ggplot2::guides(
+    fill = ggplot2::guide_legend(
+      nrow = legend_nrow,
+      byrow = TRUE,
+      override.aes = list(alpha = 0.6, linewidth = 0, colour = NA)
+    )
+  )
+
+  # ---- left plot (B) ----
+  dleft <- df_piv %>% dplyr::filter(.data$group2 == "B")
+
+  p_left <- ggplot2::ggplot(dleft, ggplot2::aes(x = reorder(.data$label, .data$gorder),
+                                               y = .data$LFC, color = .data$group, fill = .data$group)) +
+    geom_chicklet(
+      ggplot2::aes(x = reorder(.data$label, .data$gorder), y = .data$LFC, color = .data$group),
+      position = ggplot2::position_dodge2(reverse = TRUE, padding = 0.3),
+      size = .3, fill = "white", width = 0.6, radius = grid::unit(2, "pt"),
+      na.rm = TRUE, show.legend = FALSE
+    ) +
+    geom_chicklet(
+      ggplot2::aes(x = reorder(.data$label, .data$gorder), y = .data$LFC, color = .data$group, fill = .data$group),
+      alpha = 0.6,
+      position = ggplot2::position_dodge2(reverse = TRUE, padding = 0.3),
+      width = 0.6, size = .3, radius = grid::unit(2, "pt"),
+      na.rm = TRUE, show.legend = TRUE
+    ) +
+    ggplot2::geom_hline(yintercept = 0, color = "grey60", linewidth = 0.5, linetype = "dashed") +
+    ggplot2::facet_wrap(~time_point, scales = "free_y", ncol = facet_ncol) +
+    ggplot2::scale_fill_manual(
+      values = color_set,
+      breaks = c("ab", "phage", "combo", "pos_inter", "neg_inter"),
+      limits = c("ab", "phage", "combo", "pos_inter", "neg_inter"),
+      drop = FALSE,
+      labels = label_set,
+      na.translate = FALSE,
+      name = "Response classes"
+    ) +
+    ggplot2::scale_color_manual(values = color_set, guide = "none") +
+    ggplot2::labs(x = "", title = "Treatment-specific effects",tag=tag) +
+    ggplot2::theme_minimal() + custome_theme +
+    ggh4x::facetted_pos_scales(x = lapply(height_df$height, function(h) ggplot2::scale_x_discrete())) +
+    ggh4x::force_panelsizes(rows = height_df$height) +
+    ggplot2::coord_flip() +
+    legend_guide
+
+  # ---- right plot (I) ----
+  dright <- df_piv %>% dplyr::filter(.data$group2 == "I")
+
+  p_right <- ggplot2::ggplot(dright, ggplot2::aes(x = reorder(.data$label, .data$gorder),
+                                                 y = .data$LFC, color = .data$group, fill = .data$group)) +
+    geom_chicklet(
+      ggplot2::aes(x = reorder(.data$label, .data$gorder), y = .data$LFC, color = .data$group),
+      position = ggplot2::position_dodge2(reverse = TRUE, padding = 0.3),
+      size = .3, fill = "white", width = 0.1, radius = grid::unit(2, "pt"),
+      na.rm = TRUE, show.legend = FALSE
+    ) +
+    geom_chicklet(
+      ggplot2::aes(x = reorder(.data$label, .data$gorder), y = .data$LFC, color = .data$group, fill = .data$group),
+      alpha = 0.6,
+      position = ggplot2::position_dodge2(reverse = TRUE, padding = 0.3),
+      width = 0.1, size = .1, radius = grid::unit(2, "pt"),
+      na.rm = TRUE, show.legend = TRUE
+    ) +
+    ggplot2::geom_hline(yintercept = 0, color = "grey60", linewidth = 0.5, linetype = "dashed") +
+    ggplot2::facet_wrap(~time_point, scales = "free_y", ncol = facet_ncol) +
+    ggplot2::scale_fill_manual(
+      values = color_set,
+      breaks = c("ab", "phage", "combo", "pos_inter", "neg_inter"),
+      limits = c("ab", "phage", "combo", "pos_inter", "neg_inter"),
+      drop = FALSE,
+      labels = label_set,
+      na.translate = FALSE,
+      name = "Response classes"
+    ) +
+    ggplot2::scale_color_manual(values = color_set, guide = "none") +
+    ggplot2::labs(x = "", title = "Interaction effect") +
+    ggplot2::theme_minimal() + custome_theme +
+    ggplot2::theme(axis.text.y.left = ggplot2::element_blank(),
+                   axis.ticks.y = ggplot2::element_blank(),plot.tag = element_blank()) +
+    ggh4x::facetted_pos_scales(x = lapply(height_df$height, function(h) ggplot2::scale_x_discrete())) +
+    ggh4x::force_panelsizes(rows = height_df$height) +
+    ggplot2::coord_flip() +
+    legend_guide
+
+  # ---- combine ----
+  p_compact <- (p_left | p_right) +
+    patchwork::plot_layout(widths = widths, guides = "collect") &
+    ggplot2::theme(
+      legend.position = legend_position,
+      legend.box = "horizontal",
+      legend.spacing = grid::unit(legend_spacing_mm, "mm")
+    )
+
+  list(
+    plot = p_compact,
+    df_piv = df_piv,
+    p_left = p_left,
+    p_right = p_right,
+    height_df = height_df
+  )
+}
+
+fant <- plot_combo_response_chicklets(data_path = "./export/interaction/combo_therapy_responses.csv",
+                                        response_class = "Antibiotic-amplified-by-phage",
+                                         gene_category_path = "./data/gene_category.csv",tag="A")
+
+fcom <- plot_combo_response_chicklets(data_path = "./export/interaction/combo_therapy_responses.csv",
+                                        response_class = "Combination-specific",
+                                         gene_category_path = "./data/gene_category.csv",tag="B")
+
+fpha <- plot_combo_response_chicklets(data_path = "./export/interaction/combo_therapy_responses.csv",
+                                        response_class = "Phage-modified-by-antibiotic",
+                                         gene_category_path = "./data/gene_category.csv",tag= "C")
+
+
+p0 <- (fant$p_left | fant$p_right)  + plot_layout(width= c(3,1))
+                                                  
+p1 <-  (((fcom$p_left | fcom$p_right)+ plot_layout(width= c(3,1))) / ((fpha$p_left | fpha$p_right) + plot_layout(width= c(3,1)))) + plot_layout(heights = c(1,2))
+                                                                                 
+p <- (p0 | p1) 
+
+p+ plot_layout(width= c(4,2,4,2), guides = 'collect') & theme(legend.position = 'bottom')
+ggsave('./figures/response_classes_v2.pdf',device='pdf',width=10,height=8)
+```
+
+```{r}
 
 library(patchwork)
 
 
 
 gene_cat_df <- read.csv('./data/gene_category.csv')
+df_response <- read.csv("./export/interaction/combo_therapy_responses.csv")
 pap <- plot_lfc_chicklets(df_response$data,
                    response_class = "Antibiotic-amplified-by-phage",
                    gene_category = gene_cat_df)
@@ -442,10 +706,10 @@ mat_sorted <- mat[, col_info$col_name[ordered_col]]
 
 colnames(mat_sorted) <- sub("^lfc_(.*?)_sig_(.*)$", "\\1", colnames(mat_sorted)) %>%
   str_to_title() %>%                             # Ab
-  str_replace("Ab", "Antibiotic only") %>% 
-  str_replace("Phage", "Phage only")%>% 
-  str_replace("Combo", "Antibiotic + Phage") %>% 
-  str_replace("Interaction", "Interaction")          
+  str_replace("Ab", "AB") %>% 
+  str_replace("Phage", "P")%>% 
+  str_replace("Combo", "AB+P") %>% 
+  str_replace("Interaction", "I")          
 
 # Row split vector (must match row order of mat)
 row_split <- sig_df %>%
@@ -486,7 +750,7 @@ ht <- Heatmap(
   mat_sorted,
   name = "LFCs",
   col = col_fun,
-  na_col = "#F5F5F0",
+  na_col = "#FFFCFB",
   
   row_split = row_split,
   row_names_side = "left",
@@ -514,7 +778,7 @@ ht <- Heatmap(
     direction = "horizontal",
     title_position = "lefttop",
     title_gp = gpar(fontsize = 7),
-    labels_gp = gpar(fontsize = 7),
+    labels_gp = gpar(fontsize = 7)
     #at = c(-5,-2,-1,0,1,2,5),  
     #labels = c(-5,-2,-1,0,1,2,5)
   )
@@ -529,7 +793,7 @@ ht <- Heatmap(
 # 4. Draw the heatmap
 ht_drawn <- draw(ht, heatmap_legend_side = "bottom", padding = unit(c(2, 2, 2, 2), "mm"))
 
-ht_gg <- as.ggplot(function() draw(ht_drawn))  
+ht_gg <- as.ggplot(function() draw(ht_drawn))
 
 ggsave("./figures/heatmap_atm_groups.pdf",ht_gg,device='pdf', width = 5,height = 10)
 

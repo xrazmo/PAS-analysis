@@ -730,6 +730,7 @@ assess_interactions <- function(
     
     f_phage <- file.path(in_dir, paste0("all_genes_", t, "_phage1-ab0.csv"))
     f_ab <- file.path(in_dir, paste0("all_genes_", t, "_phage0-ab4.csv"))
+    f_combo <- file.path(in_dir, paste0("combo_", t, "_abconc4.phage1.csv"))
     f_int <- file.path(in_dir, paste0("all_genes_", t, "_abconc4.phage1.csv"))
     
     if (!all(file.exists(c(f_phage, f_ab, f_int)))) {
@@ -739,15 +740,18 @@ assess_interactions <- function(
     
     res_phage <- read.csv(f_phage, stringsAsFactors = FALSE, check.names = FALSE)
     res_ab    <- read.csv(f_ab,    stringsAsFactors = FALSE, check.names = FALSE)
+    res_combo <- read.csv(f_combo, stringsAsFactors = FALSE, check.names = FALSE)
     res_int   <- read.csv(f_int,   stringsAsFactors = FALSE, check.names = FALSE)
     
     phage_short <- prep_res(res_phage, "phage")
     ab_short    <- prep_res(res_ab,    "ab")
+    combo_short <- prep_res(res_combo, "combo")
     int_short   <- prep_res(res_int,   "interaction")
     
     res_all <- phage_short %>%
       full_join(ab_short, by = "gene") %>%
-      full_join(int_short, by = "gene")
+      full_join(int_short, by = "gene") %>%
+      full_join(combo_short, by = "gene")
     
     # Diagnostics
     message("  N genes merged: ", nrow(res_all))
@@ -759,10 +763,9 @@ assess_interactions <- function(
     
     res_all <- res_all %>%
       mutate(
-        sig_phage = !is.na(padj_phage) & padj_phage < 0.05 & abs(lfc_phage) > 1,
-        sig_ab    = !is.na(padj_ab)    & padj_ab    < 0.05 & abs(lfc_ab) > 1,
-        sig_interaction = !is.na(padj_interaction) & padj_interaction < 0.05 &
-          abs(lfc_interaction) > 1,
+        sig_phage = !is.na(padj_phage) & padj_phage < 0.05,
+        sig_ab    = !is.na(padj_ab)    & padj_ab    < 0.05,
+        sig_interaction = !is.na(padj_interaction) & padj_interaction < 0.05,
         
         response_class = case_when(
           sig_interaction & !sig_ab & !sig_phage ~ "Combination-specific",
