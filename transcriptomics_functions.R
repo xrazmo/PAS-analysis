@@ -768,13 +768,9 @@ assess_interactions <- function(
         sig_interaction = !is.na(padj_interaction) & padj_interaction < 0.05,
         
         response_class = case_when(
-          sig_interaction & !sig_ab & !sig_phage ~ "Combination-specific",
-          sig_interaction & sig_ab & !sig_phage  ~ "Antibiotic-amplified-by-phage",
-          sig_interaction & !sig_ab & sig_phage  ~ "Phage-modified-by-antibiotic",
-          sig_ab & sig_phage & sig_interaction   ~ "General stress",
-          sig_ab & sig_phage & !sig_interaction  ~ "Additive (no interaction)",
-          sig_ab & !sig_phage & !sig_interaction ~ "Antibiotic-only",
-          sig_phage & !sig_ab & !sig_interaction ~ "Phage-only",
+          sig_interaction  ~ "Interaction-defined (Non-additive)",
+          sig_ab & !sig_phage & !sig_interaction ~ "Antibiotic-driven (no interaction)",
+          sig_phage & !sig_ab & !sig_interaction ~ "Phage-driven (no interaction)",
           TRUE                                   ~ "No significant change"
         )
       ) %>%

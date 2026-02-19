@@ -134,7 +134,7 @@ ggsave('./figures/pcoa_venn_heatmap.pdf',device='pdf',height = 11,width = 12)
 ```{r}
 
 source("transcriptomics_functions.R")
-df_response <- assess_interactions(in_dir="./export/model_out//",
+df_response <- assess_interactions(in_dir="./export/model_out/",
                                   out_dir = "./export/interaction/",
                                    annotation = annotation)
 
@@ -154,8 +154,8 @@ df_gene <- read.csv("./export/interaction/combo_therapy_responses.csv")
 
 # -------- PARAMETERS --------
 tp_levels <- c("1h", "4h", "24h", "END")   # END is hidden stage
-classes_levels <- c("No significant change","General stress","Antibiotic-only","Phage-only",
-                    "Additive (no interaction)","Phage-modified-by-antibiotic","Antibiotic-amplified-by-phage","Combination-specific")
+classes_levels <- c("No significant change","Antibiotic-driven (no interaction)",
+                    "Phage-driven (no interaction)","Interaction-defined (Non-additive)")
 nochange_label <- "No significant change"
 
 # -------- INPUT --------
@@ -220,12 +220,9 @@ edges_plot <- edges_plot %>%
 # -------- 6) COLORS (make sink transparent) --------
 
 class_cols <- c("No significant change"="#FFE797",
-                "General stress" = "#0ABAB5",
-                "Antibiotic-only"="#FF6500","Phage-only"="#008BFF",
-                  "Additive (no interaction)"="#C40C0C",
-                "Phage-modified-by-antibiotic"="#6E026F",
-                "Antibiotic-amplified-by-phage"="#0D1164",
-                "Combination-specific"="#005F02",
+                "Antibiotic-driven (no interaction)"="#FF6500",
+                "Phage-driven (no interaction)"="#008BFF",
+                "Interaction-defined (Non-additive)"="#C40C0C",
                 "__END__"="transparent")
 
 # -------- 7) PLOT --------
@@ -256,7 +253,7 @@ ggplot(edges_plot,
                              ncol=4,title.position = "top"))
 
 
-ggsave("./figures/response_classes_snakey.pdf",device='pdf',width=8,height = 7)
+ggsave("./figures/response_classes_snakey.pdf",device='pdf',width=7,height = 6)
 
 ```
 
@@ -264,6 +261,7 @@ ggsave("./figures/response_classes_snakey.pdf",device='pdf',width=8,height = 7)
 ```{r}
 library(patchwork)
 library(ggh4x)
+
 plot_combo_response_chicklets <- function(
   data_path,
   data = NULL,
@@ -391,8 +389,8 @@ plot_combo_response_chicklets <- function(
   axis.text.y.left = ggtext::element_markdown(size = 9),
   axis.text.y.right = ggtext::element_markdown(size = 9),
   plot.title = ggplot2::element_text(hjust = 0.5,size = 8,face = "bold"),
-  legend.text = ggplot2::element_text(size = 9),
-  legend.title = ggplot2::element_text(size = 9),
+  legend.text = ggplot2::element_text(size = 8),
+  legend.title = ggplot2::element_text(size = 8,face='bold'),
   panel.grid.minor.x = ggplot2::element_blank(),
   panel.grid.major.x = ggplot2::element_line(linetype = "dashed", linewidth = .3)
 )
@@ -409,17 +407,17 @@ plot_combo_response_chicklets <- function(
   # ---- left plot (B) ----
   dleft <- df_piv %>% dplyr::filter(.data$group2 == "B")
 
-  p_left <- ggplot2::ggplot(dleft, ggplot2::aes(x = reorder(.data$label, .data$gorder),
+  p_left <- ggplot2::ggplot(dleft, ggplot2::aes(x = reorder(.data$gene_name, .data$gorder),
                                                y = .data$LFC, color = .data$group, fill = .data$group)) +
     geom_chicklet(
-      ggplot2::aes(x = reorder(.data$label, .data$gorder), y = .data$LFC, color = .data$group),
+      ggplot2::aes(x = reorder(.data$gene_name, .data$gorder), y = .data$LFC, color = .data$group),
       position = ggplot2::position_dodge2(reverse = TRUE, padding = 0.3),
       size = .3, fill = "white", width = 0.6, radius = grid::unit(2, "pt"),
       na.rm = TRUE, show.legend = FALSE
     ) +
     geom_chicklet(
-      ggplot2::aes(x = reorder(.data$label, .data$gorder), y = .data$LFC, color = .data$group, fill = .data$group),
-      alpha = 0.6,
+      ggplot2::aes(x = reorder(.data$gene_name, .data$gorder), y = .data$LFC, color = .data$group, fill = .data$group),
+      alpha = 0.8,
       position = ggplot2::position_dodge2(reverse = TRUE, padding = 0.3),
       width = 0.6, size = .3, radius = grid::unit(2, "pt"),
       na.rm = TRUE, show.legend = TRUE
@@ -446,21 +444,26 @@ plot_combo_response_chicklets <- function(
   # ---- right plot (I) ----
   dright <- df_piv %>% dplyr::filter(.data$group2 == "I")
 
-  p_right <- ggplot2::ggplot(dright, ggplot2::aes(x = reorder(.data$label, .data$gorder),
+  p_right <- ggplot2::ggplot(dright, ggplot2::aes(x = reorder(.data$gene_name, .data$gorder),
                                                  y = .data$LFC, color = .data$group, fill = .data$group)) +
-    geom_chicklet(
-      ggplot2::aes(x = reorder(.data$label, .data$gorder), y = .data$LFC, color = .data$group),
-      position = ggplot2::position_dodge2(reverse = TRUE, padding = 0.3),
-      size = .3, fill = "white", width = 0.1, radius = grid::unit(2, "pt"),
+    geom_bar(aes(x = reorder(.data$gene_name, .data$gorder,color = .data$group, fill = .data$group,y = .data$LFC)), stat='identity',
+      position = ggplot2::position_dodge2(reverse = TRUE, padding = 0.3),alpha = 0.6,
+       width = 0.1, radius = grid::unit(2, "pt"),
       na.rm = TRUE, show.legend = FALSE
     ) +
-    geom_chicklet(
-      ggplot2::aes(x = reorder(.data$label, .data$gorder), y = .data$LFC, color = .data$group, fill = .data$group),
-      alpha = 0.6,
-      position = ggplot2::position_dodge2(reverse = TRUE, padding = 0.3),
-      width = 0.1, size = .1, radius = grid::unit(2, "pt"),
-      na.rm = TRUE, show.legend = TRUE
-    ) +
+    # geom_chicklet(
+    #   ggplot2::aes(x = reorder(.data$gene_name, .data$gorder), y = .data$LFC, color = .data$group),
+    #   position = ggplot2::position_dodge2(reverse = TRUE, padding = 0.3),
+    #   size = .3, fill = "white", width = 0.1, radius = grid::unit(2, "pt"),
+    #   na.rm = TRUE, show.legend = FALSE
+    # ) +
+    # geom_chicklet(
+    #   ggplot2::aes(x = reorder(.data$gene_name, .data$gorder), y = .data$LFC, color = .data$group, fill = .data$group),
+    #   alpha = 0.6,
+    #   position = ggplot2::position_dodge2(reverse = TRUE, padding = 0.3),
+    #   width = 0.1, size = .1, radius = grid::unit(2, "pt"),
+    #   na.rm = TRUE, show.legend = TRUE
+    # ) +
     ggplot2::geom_hline(yintercept = 0, color = "grey60", linewidth = 0.5, linetype = "dashed") +
     ggplot2::facet_wrap(~time_point, scales = "free_y", ncol = facet_ncol) +
     ggplot2::scale_fill_manual(
@@ -515,12 +518,12 @@ fpha <- plot_combo_response_chicklets(data_path = "./export/interaction/combo_th
 
 p0 <- (fant$p_left | fant$p_right)  + plot_layout(width= c(3,1))
                                                   
-p1 <-  (((fcom$p_left | fcom$p_right)+ plot_layout(width= c(3,1))) / ((fpha$p_left | fpha$p_right) + plot_layout(width= c(3,1)))) + plot_layout(heights = c(1,2))
+p1 <-  (((fcom$p_left | fcom$p_right)+ plot_layout(width= c(3,1))) / ((fpha$p_left | fpha$p_right) + plot_layout(width= c(3,1)))) + plot_layout(heights = c(2,3))
                                                                                  
 p <- (p0 | p1) 
 
-p+ plot_layout(width= c(4,2,4,2), guides = 'collect') & theme(legend.position = 'bottom')
-ggsave('./figures/response_classes_v2.pdf',device='pdf',width=10,height=8)
+p+ plot_layout(width= c(4,1,3,1), guides = 'collect') & theme(legend.position = 'bottom')
+ggsave('./figures/response_classes_v2.pdf',device='pdf',width=9,height=7)
 ```
 
 ```{r}
@@ -700,7 +703,6 @@ col_info <- data.frame(
     contrast   = factor(contrast, 
                         levels = c("ab", "phage", "combo", "interaction"))
   )
-
 ordered_col <- order(col_info$time_point, col_info$contrast)
 mat_sorted <- mat[, col_info$col_name[ordered_col]]
 
@@ -762,7 +764,7 @@ ht <- Heatmap(
   row_gap = unit(1, "mm"),
   row_names_rot = 0,
   # === Column split by time_point ===
-  column_split = col_info$time_point[ordered_index],
+  column_split = col_info$time_point[ordered_col],
   cluster_columns = FALSE,
   cluster_column_slices = FALSE,
   column_title = levels(col_info$time_point),
