@@ -1,0 +1,598 @@
+---
+title: "Phage-Antibiotic Combination: Interaction-Defined Transcriptional Responses"
+author: ""
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  warning = T,
+  message = T
+
+)
+```
+
+```{r libraries}
+library(tidyverse)
+library(ggplot2)
+library(patchwork)
+library(ggrepel)
+library(scales)
+library(RColorBrewer)
+library(forcats)
+```
+
+---
+
+# 1  Load and prepare data
+
+```{r load-data}
+# ── Main transcriptomics table (all time points, all genes) ──────────────────
+df <- read.csv("./export/interaction/combo_therapy_responses.csv", stringsAsFactors = FALSE)
+
+# ── 4 h interaction-defined set with functional annotations ─────────────────
+int4_long <- read.csv(
+  "./export/__response_calss_Interaction-defined_(Non-additive)_4h.csv",
+  stringsAsFactors = FALSE
+)
+```
+
+```{r colour-palette}
+# Shared colour scheme used throughout ----------------------------------------
+class_colours <- c(
+  "No significant change"              = "#BDBDBD",
+  "Phage-driven (no interaction)"      = "#4CAF50",
+  "Antibiotic-driven (no interaction)" = "#FF9800",
+  "Shared (additive, no interaction)"  = "#2196F3",
+  "Interaction-defined (Non-additive)" = "#E53935"
+)
+
+# Condition colours for lollipop / dot plots
+cond_colours <- c(
+  phage       = "#4CAF50",
+  ab          = "#FF9800",
+  combo       = "#9C27B0",
+  interaction = "#E53935"
+)
+
+# Functional group palette (12 groups — uses Set3 + manual additions)
+fg_levels <- c(
+  "Anaerobic respiration & redox metabolism",
+  "Protein quality control & stress",
+  "Oxidative stress response",
+  "Outer membrane permeability & porins",
+  "Flagellar assembly & motility",
+  "Acid stress & amino acid metabolism",
+  "Polyamine metabolism",
+  "Zinc acquisition & metal homeostasis",
+  "DNA replication & repair",
+  "Biofilm & surface regulation",
+  "Adhesion & fimbriae",
+  "Efflux & antibiotic resistance",
+  "Other"
+)
+
+set.seed(42)
+fg_pal <- c(
+  "#D32F2F", "#1565C0", "#2E7D32", "#F57F17",
+  "#6A1B9A", "#AD1457", "#00695C", "#E65100",
+  "#283593", "#4E342E", "#37474F", "#558B2F",
+  "#78909C"
+)
+names(fg_pal) <- fg_levels
+```
+
+---
+
+# 2  Panel A — Stacked bar: response class composition across time points
+
+```{r panel-A-data}
+# Count genes per response class × time point
+bar_df <- df %>%
+  count(time_point, response_class) %>%
+  mutate(
+    time_point    = factor(time_point, levels = c("1h", "4h", "24h")),
+    response_class = factor(response_class, levels = names(class_colours))
+  )
+```
+
+```{r panel-A-plot}
+pA <- ggplot(bar_df, aes(x = time_point, y = n, fill = response_class)) +
+  geom_bar(stat = "identity", width = 0.65, colour = "white", linewidth = 0.3) +
+  geom_text(
+    aes(label = ifelse(n > 50, n, "")),
+    position = position_stack(vjust = 0.5),
+    size = 3, colour = "white", fontface = "bold"
+  ) +
+  scale_fill_manual(
+    values = class_colours,
+    name   = "Response class",
+    guide  = guide_legend(ncol = 1, keywidth = 0.8, keyheight = 0.8)
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.04))) +
+  labs(
+    title    = "A  Response class composition",
+    subtitle = "All genes across three time points",
+    x        = "Time point",
+    y        = "Number of genes"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(
+    plot.title       = element_text(face = "bold", size = 12),
+    plot.subtitle    = element_text(colour = "grey40", size = 9),
+    legend.position  = "right",
+    legend.title     = element_text(face = "bold", size = 9),
+    legend.text      = element_text(size = 8),
+    axis.text        = element_text(colour = "black"),
+    panel.grid.major.y = element_line(colour = "grey90", linewidth = 0.3)
+  )
+
+pA
+```
+
+---
+
+# 3  Panel B — Scatter: interaction coefficient vs antibiotic LFC (4 h)
+
+Genes in the interaction-defined class are highlighted; genes discussed in
+the resensitization narrative are labelled.
+
+```{r panel-B-data}
+# Work at the 4 h slice
+df4 <- df %>% filter(time_point == "4h")
+
+# Genes to label explicitly
+label_genes <- c(
+  "torA", "torC", "torD",
+  "hycE", "hycF",
+  "dnaK", "groL", "groS", "hslU", "hslV",
+  "ahpC", "ahpF",
+  "ompF", "ompC",
+  "cadA",
+  "znuA",
+  "fliA", "tap",
+  "acrR", "marA", "acrZ", "ompW"
+)
+
+scatter_df <- df4 %>%
+  mutate(
+    highlight = response_class == "Interaction-defined (Non-additive)",
+    label_me  = gene.y %in% label_genes,
+    pt_alpha  = case_when(
+      highlight ~ 1,
+      response_class == "No significant change" ~ 0.15,
+      TRUE ~ 0.4
+    ),
+    pt_size = ifelse(highlight, 2.2, 1.0)
+  ) %>%
+  filter(!is.na(lfc_interaction), !is.na(lfc_ab))
+```
+
+```{r panel-B-plot, fig.height=7}
+pB <- ggplot(scatter_df,
+             aes(x = lfc_ab, y = lfc_interaction,
+                 colour = response_class, alpha = pt_alpha, size = pt_size)) +
+  # background points
+  geom_point(data = filter(scatter_df, !highlight), shape = 16) +
+  # interaction-defined points on top
+  geom_point(data = filter(scatter_df,  highlight), shape = 16) +
+  # reference lines
+  geom_hline(yintercept = 0, linetype = "dashed",
+             colour = "grey50", linewidth = 0.4) +
+  geom_vline(xintercept = 0, linetype = "dashed",
+             colour = "grey50", linewidth = 0.4) +
+  # shaded quadrants (antibiotic-induced & interaction-blunted)
+  annotate("rect", xmin = 0, xmax = Inf, ymin = -Inf, ymax = 0,
+           fill = "#FFEBEE", alpha = 0.35) +
+  annotate("rect", xmin = -Inf, xmax = 0, ymin = 0, ymax = Inf,
+           fill = "#E8F5E9", alpha = 0.35) +
+  # quadrant labels
+  annotate("text", x = 7.5, y = -3.1,
+           label = "AB-induced\nblunted by phage",
+           colour = "#B71C1C", size = 2.8, fontface = "italic", hjust = 1) +
+  annotate("text", x = -3.0, y = 2.9,
+           label = "AB-repressed\nrescued by phage",
+           colour = "#1B5E20", size = 2.8, fontface = "italic", hjust = 0) +
+  # labels for genes of interest
+  geom_label_repel(
+    data        = filter(scatter_df, label_me & highlight),
+    aes(label   = gene.y),
+    size        = 2.8,
+    fontface    = "italic",
+    fill        = "white",
+    colour      = "#B71C1C",
+    label.size  = 0.2,
+    box.padding = 0.35,
+    max.overlaps = 30,
+    segment.colour = "grey60",
+    segment.size   = 0.3,
+    show.legend = FALSE
+  ) +
+  scale_colour_manual(values = class_colours, guide = "none") +
+  scale_alpha_identity() +
+  scale_size_identity() +
+  scale_x_continuous(limits = c(-6, 8.5),
+                     breaks = seq(-6, 8, by = 2)) +
+  scale_y_continuous(limits = c(-3.2, 3.2),
+                     breaks = seq(-3, 3, by = 1)) +
+  labs(
+    title    = "B  Interaction coefficient vs antibiotic effect (4 h)",
+    subtitle = "Red points: interaction-defined genes  |  shaded: resensitization quadrants",
+    x        = expression("Antibiotic LFC (log"[2]*"FC)"),
+    y        = expression("Interaction coefficient (\u0394log"[2]*"FC)")
+  ) +
+  theme_classic(base_size = 11) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 12),
+    plot.subtitle = element_text(colour = "grey40", size = 9),
+    axis.text     = element_text(colour = "black"),
+    panel.grid.major = element_line(colour = "grey93", linewidth = 0.3)
+  )
+
+pB
+```
+
+
+---
+
+# 4  Panel C — Dot plot: interaction coefficients by functional group
+
+All 113 interaction-defined genes at 4 h, coloured by functional group,
+sorted by interaction coefficient within group.
+
+```{r panel-C-data}
+# Extract interaction rows and join functional group
+inter_genes <- int4_long %>%
+  filter(group2 == "I") %>%          # interaction coefficient rows only
+  select(gene_name, functional_group, lfc_interaction = LFC) %>%
+  mutate(
+    functional_group = case_when(
+      is.na(functional_group) ~ "Other",
+      functional_group %in% fg_levels ~ functional_group,
+      TRUE ~ "Other"
+    ),
+    functional_group = factor(functional_group, levels = fg_levels),
+    direction = ifelse(lfc_interaction < 0, "Negative\n(blunted)", "Positive\n(rescued)")
+  ) %>%
+  # remove duplicates (some genes appear twice due to Prokka annotation)
+  distinct(gene_name, .keep_all = TRUE) %>%
+  arrange(functional_group, lfc_interaction) %>%
+  mutate(gene_name = fct_inorder(gene_name))
+```
+
+```{r panel-C-plot}
+pC <- ggplot(inter_genes,
+             aes(x = lfc_interaction, y = gene_name,
+                 colour = functional_group)) +
+  geom_vline(xintercept = 0, linetype = "dashed",
+             colour = "grey50", linewidth = 0.4) +
+  geom_segment(aes(x = 0, xend = lfc_interaction,
+                   y = gene_name, yend = gene_name),
+               linewidth = 0.5, alpha = 0.6) +
+  geom_point(size = 2.8) +
+  facet_grid(functional_group ~ .,
+             scales = "free_y", space = "free_y",
+             switch = "y") +
+  scale_colour_manual(values = fg_pal, guide = "none") +
+  scale_x_continuous(breaks = seq(-3, 3, by = 1),
+                     limits = c(-3.2, 3.2)) +
+  labs(
+    title    = "C  Interaction coefficients by functional group (4 h)",
+    subtitle = "Each point = one gene; left = phage blunts antibiotic induction; right = phage rescues antibiotic repression",
+    x        = expression("Interaction coefficient (\u0394log"[2]*"FC)"),
+    y        = NULL
+  ) +
+  theme_bw(base_size = 9.5) +
+  theme(
+    plot.title        = element_text(face = "bold", size = 12),
+    plot.subtitle     = element_text(colour = "grey40", size = 8),
+    strip.text.y.left = element_text(angle = 0, hjust = 1,
+                                     size = 7.5, face = "bold"),
+    strip.placement   = "outside",
+    strip.background  = element_rect(fill = "grey95", colour = NA),
+    panel.grid.major.x = element_line(colour = "grey90", linewidth = 0.3),
+    panel.grid.minor   = element_blank(),
+    axis.text.y        = element_text(size = 7.5, face = "italic"),
+    axis.text.x        = element_text(colour = "black"),
+    panel.spacing      = unit(0.15, "lines")
+  )
+
+pC
+```
+
+---
+
+# 5  Panel D — Four-condition LFC heatmap for focal gene clusters
+
+Shows phage / antibiotic / combo / interaction LFC for the key
+resensitization-relevant gene sets discussed in the paper.
+
+```{r panel-D-data}
+# Define focal gene sets with their narrative cluster label
+focal <- tribble(
+  ~gene_name,  ~cluster,
+  # Anaerobic escape
+  "torA",  "Anaerobic\nrescue\n(tor/hyc)",
+  "torC",  "Anaerobic\nrescue\n(tor/hyc)",
+  "torD",  "Anaerobic\nrescue\n(tor/hyc)",
+  "hycE",  "Anaerobic\nrescue\n(tor/hyc)",
+  "hycF",  "Anaerobic\nrescue\n(tor/hyc)",
+  "hycG",  "Anaerobic\nrescue\n(tor/hyc)",
+  "hycH",  "Anaerobic\nrescue\n(tor/hyc)",
+  # Proteostasis
+  "dnaK",  "Proteostasis",
+  "dnaJ",  "Proteostasis",
+  "groL",  "Proteostasis",
+  "groS",  "Proteostasis",
+  "htpG",  "Proteostasis",
+  "hslU",  "Proteostasis",
+  "hslV",  "Proteostasis",
+  # Oxidative stress
+  "ahpC",  "Oxidative\nstress",
+  "ahpF",  "Oxidative\nstress",
+  "cnoX",  "Oxidative\nstress",
+  "dsbC",  "Oxidative\nstress",
+  # Outer membrane / porins
+  "ompF",  "Outer\nmembrane",
+  "ompC",  "Outer\nmembrane",
+  "ompW",  "Outer\nmembrane",
+  "ompA",  "Outer\nmembrane",
+  # Acid stress
+  "cadA",  "Acid\nstress",
+  "lysU",  "Acid\nstress",
+  # Zinc
+  "znuA",  "Zinc\nhomeostasis",
+  "znuC",  "Zinc\nhomeostasis",
+  # Efflux / mar
+  "marA",  "Mar/Acr\nregulon",
+  "marR",  "Mar/Acr\nregulon",
+  "acrR",  "Mar/Acr\nregulon",
+  "acrA",  "Mar/Acr\nregulon",
+  "acrB",  "Mar/Acr\nregulon",
+  "acrZ",  "Mar/Acr\nregulon",
+  "tolC",  "Mar/Acr\nregulon"
+)
+
+heat_df <- df4 %>%
+  filter(gene.y %in% focal$gene_name) %>%
+  select(gene_name = gene.y,
+         Phage       = lfc_phage,
+         Antibiotic  = lfc_ab,
+         Combination = lfc_combo,
+         Interaction = lfc_interaction) %>%
+  distinct(gene_name, .keep_all = TRUE) %>%
+  left_join(focal, by = "gene_name") %>%
+  pivot_longer(cols = c(Phage, Antibiotic, Combination, Interaction),
+               names_to = "condition", values_to = "lfc") %>%
+  mutate(
+    condition = factor(condition,
+                       levels = c("Phage","Antibiotic","Combination","Interaction")),
+    cluster   = factor(cluster, levels = unique(focal$cluster)),
+    gene_name = factor(gene_name,
+                       levels = rev(unique(focal$gene_name)))
+  )
+```
+
+```{r panel-D-plot, fig.height=9, fig.width=10}
+lfc_limit <- 8
+
+pD <- ggplot(heat_df,
+             aes(x = condition, y = gene_name, fill = lfc)) +
+  geom_tile(colour = "white", linewidth = 0.4) +
+  geom_text(aes(label = round(lfc, 1)),
+            size = 2.5, colour = "white",
+            fontface = "bold",
+            data = filter(heat_df, abs(lfc) >= 0.8)) +
+  facet_grid(cluster ~ ., scales = "free_y",
+             space = "free_y", switch = "y") +
+  scale_fill_gradientn(
+    colours  = c("#1565C0", "#42A5F5", "#E3F2FD",
+                 "white",
+                 "#FFEBEE", "#EF5350", "#B71C1C"),
+    values   = rescale(c(-lfc_limit, -2, -0.5, 0, 0.5, 2, lfc_limit)),
+    limits   = c(-lfc_limit, lfc_limit),
+    oob      = squish,
+    name     = expression(log[2]*"FC"),
+    guide    = guide_colourbar(
+      barwidth  = 0.6,
+      barheight = 8,
+      title.position = "top",
+      title.hjust    = 0.5
+    )
+  ) +
+  # vertical line separating mono-therapies from interaction column
+  geom_vline(xintercept = 3.5, colour = "grey30",
+             linewidth = 0.8, linetype = "solid") +
+  labs(
+    title    = "D  LFC heatmap — focal resensitization gene clusters (4 h)",
+    subtitle = "Left of line: observed LFC per condition; right: interaction coefficient (Δlog₂FC)",
+    x        = NULL,
+    y        = NULL
+  ) +
+  theme_bw(base_size = 9.5) +
+  theme(
+    plot.title         = element_text(face = "bold", size = 12),
+    plot.subtitle      = element_text(colour = "grey40", size = 8),
+    axis.text.y        = element_text(size = 8, face = "italic"),
+    axis.text.x        = element_text(size = 9, colour = "black",
+                                      face = c("plain","plain","plain","bold")),
+    strip.text.y.left  = element_text(angle = 0, hjust = 1,
+                                      size = 7.5, face = "bold"),
+    strip.placement    = "outside",
+    strip.background   = element_rect(fill = "grey95", colour = NA),
+    panel.grid         = element_blank(),
+    panel.spacing      = unit(0.15, "lines"),
+    legend.position    = "right"
+  )
+
+pD
+```
+
+---
+
+# 6  Panel E — Selected gene lollipop: four-condition profile
+
+Focuses on the strongest interaction signals, showing the four LFC values
+side-by-side for intuitive interpretation of the non-additivity.
+
+```{r panel-E-data}
+top_genes <- c("torA","torC","torD","hycF","hycE",
+               "dnaK","groL","hslU","ahpF","ahpC",
+               "cadA","ompF","ompC","znuA","marA","acrZ")
+
+lollipop_df <- df4 %>%
+  filter(gene.y %in% top_genes) %>%
+  select(gene_name = gene.y,
+         phage       = lfc_phage,
+         ab          = lfc_ab,
+         combo       = lfc_combo,
+         interaction = lfc_interaction) %>%
+  distinct(gene_name, .keep_all = TRUE) %>%
+  pivot_longer(-gene_name, names_to = "condition", values_to = "lfc") %>%
+  mutate(
+    condition = factor(condition,
+                       levels = c("phage","ab","combo","interaction"),
+                       labels = c("Phage","Antibiotic","Combination","Interaction \u0394")),
+    gene_name = factor(gene_name, levels = rev(top_genes))
+  )
+```
+
+```{r panel-E-plot, fig.height=7}
+pE <- ggplot(lollipop_df,
+             aes(x = lfc, y = gene_name, colour = condition)) +
+  geom_vline(xintercept = 0, colour = "grey40",
+             linewidth = 0.5, linetype = "dashed") +
+  geom_segment(aes(x = 0, xend = lfc,
+                   y = gene_name, yend = gene_name),
+               linewidth = 0.8, alpha = 0.7) +
+  geom_point(size = 3) +
+  facet_wrap(~ condition, nrow = 1) +
+  scale_colour_manual(values = cond_colours, guide = "none") +
+  scale_x_continuous(breaks = seq(-4, 8, by = 2)) +
+  labs(
+    title    = "E  Four-condition LFC profiles — top interaction genes (4 h)",
+    subtitle = "Each row = one gene; panels show observed LFC per condition and the interaction coefficient",
+    x        = expression(log[2]*"FC"),
+    y        = NULL
+  ) +
+  theme_bw(base_size = 10) +
+  theme(
+    plot.title       = element_text(face = "bold", size = 12),
+    plot.subtitle    = element_text(colour = "grey40", size = 9),
+    strip.text       = element_text(face = "bold", size = 10),
+    strip.background = element_rect(fill = "grey95", colour = NA),
+    axis.text.y      = element_text(size = 9, face = "italic"),
+    axis.text.x      = element_text(colour = "black"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_line(colour = "grey93")
+  )
+
+pE
+```
+
+---
+
+# 7  Compose multi-panel figure
+
+## Figure 1: Overview panels (A + B)
+
+```{r fig1, fig.width=14, fig.height=6}
+fig1 <- pA + pB +
+  plot_annotation(
+    title   = "Figure 1 | Response class landscape and interaction overview",
+    theme   = theme(
+      plot.title = element_text(face = "bold", size = 13, hjust = 0)
+    )
+  ) +
+  plot_layout(widths = c(1, 1.6))
+
+fig1
+```
+
+```{r save-fig1}
+ggsave("Figure1_overview.pdf",  fig1, width = 14, height = 6,  device = "pdf")
+ggsave("Figure1_overview.png",  fig1, width = 14, height = 6,  dpi = 300)
+```
+
+## Figure 2: Interaction-defined gene details (C + D)
+
+```{r fig2, fig.width=18, fig.height=11}
+fig2 <- pC + pD +
+  plot_annotation(
+    title   = "Figure 2 | Interaction-defined gene clusters and LFC heatmap (4 h)",
+    theme   = theme(
+      plot.title = element_text(face = "bold", size = 13, hjust = 0)
+    )
+  ) +
+  plot_layout(widths = c(1.1, 1))
+
+fig2
+```
+
+```{r save-fig2}
+ggsave("Figure2_interaction_clusters.pdf", fig2, width = 18, height = 11, device = "pdf")
+ggsave("Figure2_interaction_clusters.png", fig2, width = 18, height = 11, dpi = 300)
+```
+
+## Figure 3: Four-condition lollipop (E — standalone)
+
+```{r fig3, fig.width=13, fig.height=7}
+fig3 <- pE +
+  plot_annotation(
+    title = "Figure 3 | Four-condition LFC profiles — top interaction genes (4 h)",
+    theme = theme(
+      plot.title = element_text(face = "bold", size = 13, hjust = 0)
+    )
+  )
+
+fig3
+```
+
+```{r save-fig3}
+ggsave("Figure3_lollipop.pdf", fig3, width = 13, height = 7, device = "pdf")
+ggsave("Figure3_lollipop.png", fig3, width = 13, height = 7, dpi = 300)
+```
+
+## Combined 5-panel figure (publication layout)
+
+```{r fig-combined, fig.width=18, fig.height=20}
+fig_combined <-
+  (pA | pB) /
+  (pC | pD) /
+  pE +
+  plot_annotation(
+    title   = "Phage–antibiotic combination: interaction-defined transcriptional responses",
+    caption = "LFC: log₂ fold change relative to untreated control. Interaction coefficient (Δlog₂FC): departure of combination response from additive expectation.",
+    tag_levels = "A",
+    theme = theme(
+      plot.title   = element_text(face = "bold", size = 14, hjust = 0),
+      plot.caption = element_text(colour = "grey50", size = 8, hjust = 0)
+    )
+  ) +
+  plot_layout(heights = c(1, 1.6, 0.9))
+
+fig_combined
+```
+
+```{r save-combined}
+ggsave("Figure_combined.pdf", fig_combined,
+       width = 18, height = 20, device = "pdf")
+ggsave("Figure_combined.png", fig_combined,
+       width = 18, height = 20, dpi = 300)
+```
+
+---
+
+# 8  Session info
+
+```{r session-info}
+sessionInfo()
+```

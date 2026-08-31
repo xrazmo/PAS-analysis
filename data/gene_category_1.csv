@@ -1,0 +1,72 @@
+gene_name,category
+bamA,Bam complex (OM protein assembly)
+bamB,Bam complex (OM protein assembly)
+bamC,Bam complex (OM protein assembly)
+bamD,Bam complex (OM protein assembly)
+bamE,Bam complex (OM protein assembly)
+wza,Capsule / O-antigen transport
+wzxC,Capsule / O-antigen transport
+wzxE,Capsule / O-antigen transport
+wzyE,Capsule / O-antigen transport
+ftsA,Cell division
+ftsB,Cell division
+ftsE,Cell division
+ftsH,Cell division
+ftsI,Cell division
+ftsK,Cell division
+ftsL,Cell division
+ftsN,Cell division
+ftsP,Cell division
+ftsQ,Cell division
+ftsW,Cell division
+ftsX,Cell division
+ftsY,Cell division
+ftsZ,Cell division
+mraZ,Cell division
+tolC,Efflux / Outer membrane channel
+degP,Envelope stress response
+rpoE,Envelope stress response
+cpxA,Envelope stress response
+cpxR,Envelope stress response
+cpxP,Envelope stress response
+waaA,LPS core biosynthesis
+waaC,LPS core biosynthesis
+waaF,LPS core biosynthesis
+waaG,LPS core biosynthesis
+waaH,LPS core biosynthesis
+waaP,LPS core biosynthesis
+waaQ,LPS core biosynthesis
+lptA,LPS transport system (Lpt)
+lptB,LPS transport system (Lpt)
+lptC,LPS transport system (Lpt)
+lptD,LPS transport system (Lpt)
+lptE,LPS transport system (Lpt)
+lptF,LPS transport system (Lpt)
+lptG,LPS transport system (Lpt)
+ompA,Outer membrane structural
+lpp,Outer membrane structural
+murA,Peptidoglycan biosynthesis / recycling
+murB,Peptidoglycan biosynthesis / recycling
+murC,Peptidoglycan biosynthesis / recycling
+murD,Peptidoglycan biosynthesis / recycling
+murE,Peptidoglycan biosynthesis / recycling
+murF,Peptidoglycan biosynthesis / recycling
+murG,Peptidoglycan biosynthesis / recycling
+murI,Peptidoglycan biosynthesis / recycling
+murJ,Peptidoglycan biosynthesis / recycling
+mraY,Peptidoglycan biosynthesis / recycling
+murP,Peptidoglycan biosynthesis / recycling
+murQ,Peptidoglycan biosynthesis / recycling
+murR,Peptidoglycan biosynthesis / recycling
+ompC,Porin
+ompF,Porin
+ompG,Porin
+ompL,Porin
+ompN,Porin
+ompW,Porin
+ompX,Porin
+tolA,Tol-Pal system (Envelope integrity)
+tolB,Tol-Pal system (Envelope integrity)
+tolQ,Tol-Pal system (Envelope integrity)
+tolR,Tol-Pal system (Envelope integrity)
+pal,Tol-Pal system (Envelope integrity)

@@ -1,0 +1,633 @@
+---
+title: "interaction_plots"
+author: "Mohammad Razavi"
+date: "2026-06-03"
+output: html_document
+---
+
+```{r libraries}
+library(tidyverse)
+library(ggplot2)
+library(patchwork)
+library(ggrepel)
+library(scales)
+library(RColorBrewer)
+library(forcats)
+```
+
+---
+
+# 1  Load and prepare data
+
+```{r load-data}
+# ── Main transcriptomics table (all time points, all genes) ──────────────────
+df <- read.csv("./export/interaction/combo_therapy_responses.csv", stringsAsFactors = FALSE)
+
+# ── 4 h interaction-defined set with functional annotations ─────────────────
+int4_long <- read.csv(
+  "./export/__response_calss_Interaction-defined_(Non-additive)_4h.csv",
+  stringsAsFactors = FALSE
+)
+```
+
+```{r colour-palette}
+# Shared colour scheme used throughout ----------------------------------------
+class_colours <- c(
+  "Interaction-defined (Non-additive)" = "#C40C0C",
+  "Phage-driven (no interaction)"      = "#3396D3",
+  "Antibiotic-driven (no interaction)" = "#48A111",
+  "Shared (additive, no interaction)"  = "#F4A824",
+  "No significant change"              = "#BFC9D1"
+)
+
+# Condition colours for lollipop / dot plots
+cond_colours <- c(
+  phage       = "#3396D3",
+  ab          = "#48A111",
+  combo       = "#9C27B0",
+  interaction = "#C40C0C"
+)
+
+# Functional group palette (12 groups — uses Set3 + manual additions)
+fg_levels <- c(
+  "Anaerobic respiration escape",
+  "Proteostasis",
+  "Oxidative stress",
+  "Outer membrane & porins",
+  "Flagellar assembly & motility"
+)
+
+set.seed(42)
+fg_pal <- c(
+  "#D32F2F", "#1565C0", "#2E7D32", "#F57F17",
+  "#6A1B9A"
+  
+)
+names(fg_pal) <- fg_levels
+```
+
+---
+
+# 3  Panel B — Scatter: interaction coefficient vs antibiotic LFC (4 h)
+
+Genes in the interaction-defined class are highlighted; genes discussed in
+the resensitization narrative are labelled.
+
+```{r panel-B-data}
+# Work at the 4 h slice
+df4 <- df %>% filter(time_point == "4h")
+
+# Genes to label explicitly
+label_genes <- c(
+  "torA", "torC", "torD",
+  "hycE", "hycF",
+  "dnaK", "groL", "groS", "hslU", "hslV",
+  "ahpC", "ahpF",
+  "ompF", "ompC",
+  "cadA",
+  "znuA",
+  "fliA", "tap",
+  "acrR", "marA", "acrZ", "ompW"
+)
+
+scatter_df <- df4 %>%
+  mutate(
+    highlight = response_class == "Interaction-defined (Non-additive)",
+    label_me  = gene.y %in% label_genes,
+    pt_alpha  = case_when(
+      highlight ~ 1,
+      response_class == "No significant change" ~ 0.15,
+      TRUE ~ 0.4
+    ),
+    pt_size = ifelse(highlight, 2.2, 1.0)
+  ) %>%
+  filter(!is.na(lfc_interaction), !is.na(lfc_ab))
+
+
+scatter_df <- scatter_df %>% mutate(response_class=factor(response_class,levels=names(class_colours)))
+```
+
+```{r panel-B-plot}
+p_scatter <- ggplot(scatter_df,
+             aes(x = lfc_ab, y = lfc_interaction,
+                 fill = response_class, alpha = pt_alpha, size = pt_size)) +
+  # background points
+  geom_point(data = filter(scatter_df, !highlight), shape = 21) +
+  # interaction-defined points on top
+  geom_point(data = filter(scatter_df,  highlight), shape = 21) +
+  # reference lines
+  geom_hline(yintercept = 0, linetype = "dashed",
+             colour = "grey50", linewidth = 0.4) +
+  geom_vline(xintercept = 0, linetype = "dashed",
+             colour = "grey50", linewidth = 0.4) +
+  # shaded quadrants (antibiotic-induced & interaction-blunted)
+  annotate("rect", xmin = 0, xmax = Inf, ymin = -Inf, ymax = 0,
+           fill = "#FFEBEE", alpha = 0.35) +
+  annotate("rect", xmin = -Inf, xmax = 0, ymin = 0, ymax = Inf,
+           fill = "#E8F5E9", alpha = 0.35) +
+  # quadrant labels
+  annotate("text", x = 8, y = -0.5,
+           label = "AB-induced\nblunted by phage",
+           colour = "#B71C1C", size =3.5, fontface = "bold", hjust = 1) +
+  annotate("text", x = -5.5, y = 2.9,
+           label = "AB-repressed\nrescued by phage",
+           colour = "#1B5E20", size = 3.5, fontface = "bold", hjust = 0) +
+  # labels for genes of interest
+  geom_label_repel(
+    data        = filter(scatter_df, label_me & highlight),
+    aes(label   = gene.y),
+    size        = 2.8,
+    fontface    = "italic",
+    fill        = "white",
+    colour      = "#B71C1C",
+    label.size  = 0.2,
+    box.padding = 0.35,
+    max.overlaps = 30,
+    segment.colour = "grey60",
+    segment.size   = 0.3,
+    show.legend = FALSE
+  ) +
+  scale_fill_manual(values = class_colours) +
+  scale_alpha_identity() +
+  scale_size_identity() +
+  scale_x_continuous(limits = c(-6, 8.5),
+                     breaks = seq(-6, 8, by = 2)) +
+  scale_y_continuous(limits = c(-3.2, 3.2),
+                     breaks = seq(-3, 3, by = 1)) +
+  labs(
+    #title    = "B  Interaction coefficient vs antibiotic effect (4 h)",
+    #subtitle = "Red points: interaction-defined genes  |  shaded: resensitization quadrants",
+    x        = expression("Antibiotic LFC (log"[2]*"FC)"),
+    y        = expression("Interaction coefficient (\u0394log"[2]*"FC)")
+  ) +
+  theme_bw(base_size = 11) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 12),
+    plot.subtitle = element_text(colour = "grey40", size = 9),
+    axis.text     = element_text(colour = "black"),
+    panel.grid.major = element_line(colour = "grey93", linewidth = 0.3),
+    legend.position = "top"
+  ) + guides(fill=guide_legend(override.aes = list(size=3), nrow=2,title=""))
+
+
+p_scatter
+```
+
+
+# Panel D — Slope graph: observed vs expected additive for focal genes
+
+Shows the gap between expected additive and observed combination for the
+most mechanistically important genes across four functional clusters.
+
+```{r panel-D-data}
+focal_genes <- tribble(
+  ~gene,   ~cluster,
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Category 1: Anaerobic respiration escape (tor/hyc)
+  # ─────────────────────────────────────────────────────────────────────
+  "torA",  "Anaerobic respiration escape",
+  "torC",  "Anaerobic respiration escape",
+  "torD",  "Anaerobic respiration escape",
+  "hycC",  "Anaerobic respiration escape",
+  "hycE",  "Anaerobic respiration escape",
+  "hycF",  "Anaerobic respiration escape",
+  "hycG",  "Anaerobic respiration escape",
+  "hycH",  "Anaerobic respiration escape",
+  "fdhF",  "Anaerobic respiration escape",
+  "dmsD",  "Anaerobic respiration escape",
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Category 2: Proteostasis (chaperones + HslVU)
+  # ─────────────────────────────────────────────────────────────────────
+  "dnaK",  "Proteostasis",
+  "dnaJ",  "Proteostasis",
+  "groL",  "Proteostasis",
+  "groS",  "Proteostasis",
+  "htpG",  "Proteostasis",
+  "hslU",  "Proteostasis",
+  "hslV",  "Proteostasis",
+  "ybeZ",  "Proteostasis",
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Category 3: Oxidative stress (AhpCF + redox enzymes)
+  # ─────────────────────────────────────────────────────────────────────
+  "ahpC",  "Oxidative stress",
+  "ahpF",  "Oxidative stress",
+  "cnoX",  "Oxidative stress",
+  "dsbC",  "Oxidative stress",
+  "yqhD",  "Oxidative stress",
+  "ydjA",  "Oxidative stress",
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Category 4: Outer membrane & porins
+  # ─────────────────────────────────────────────────────────────────────
+  "ompF",  "Outer membrane & porins",
+  "ompC",  "Outer membrane & porins",
+  "ompW",  "Outer membrane & porins",
+  "ompA",  "Outer membrane & porins",
+  "ompR",  "Outer membrane & porins",
+  "ompX",  "Outer membrane & porins",
+
+)
+pD_df <- df4 %>%
+  filter(gene.y %in% focal_genes$gene) %>%
+  distinct(gene.y, .keep_all = TRUE) %>%
+  select(gene = gene.y,
+         lfc_phage, lfc_ab, lfc_combo, lfc_interaction) %>%
+  mutate(lfc_expected = lfc_phage + lfc_ab) %>%
+  left_join(focal_genes, by = "gene") %>%
+  mutate(
+    cluster = factor(cluster, levels = unique(focal_genes$cluster)),
+    gene    = factor(gene,    levels = rev(unique(focal_genes$gene)))
+  )
+
+# Long for slope: three x positions — Phage, Antibiotic, Expected, Observed
+pD_long <- pD_df %>%
+  select(gene, cluster, lfc_phage, lfc_ab, lfc_expected, lfc_combo) %>%
+  pivot_longer(
+    cols      = c(lfc_phage, lfc_ab, lfc_expected, lfc_combo),
+    names_to  = "condition",
+    values_to = "lfc"
+  ) %>%
+  mutate(
+    condition = factor(condition,
+                       levels = c("lfc_phage","lfc_ab","lfc_expected","lfc_combo"),
+                       labels = c("Phage","Antibiotic",
+                                  "Expected\nadditive","Observed\ncombination")),
+    line_type = ifelse(condition %in% c("Expected\nadditive","Observed\ncombination"),
+                       "focal", "mono")
+  )
+```
+
+```{r panel-D-plot}
+# ── Wide format needed for manual segments ───────────────────────────────────
+pD_wide <- pD_df  # already has lfc_phage, lfc_ab, lfc_expected, lfc_combo, cluster, gene
+
+p_line <- ggplot() +
+
+  geom_hline(yintercept = 0, colour = "grey55",
+             linewidth = 0.4, linetype = "dashed") +
+
+  # ── Segment 1: Phage → Antibiotic (solid) ──────────────────────────────────
+  geom_segment(
+    data = pD_wide,
+    aes(x = 1, xend = 2,
+        y = lfc_phage, yend = lfc_ab,
+        colour = cluster, group = gene),
+    linewidth = 0.6, alpha = 0.75, linetype = "solid"
+  ) +
+
+  # ── Segment 2: Antibiotic → Expected additive (dotted) ─────────────────────
+  geom_segment(
+    data = pD_wide,
+    aes(x = 2, xend = 3,
+        y = lfc_ab, yend = lfc_expected,
+        colour = "black", group = gene),
+    linewidth = 0.6, alpha = 0.75, linetype = "dashed"
+  ) +
+
+  # ── Segment 3: Antibiotic → Observed combination (solid) ───────────────────
+  geom_segment(
+    data = pD_wide,
+    aes(x = 2, xend = 4,
+        y = lfc_ab, yend = lfc_combo,
+        colour = cluster, group = gene),
+    linewidth = 0.6, alpha = 0.75, linetype = "solid"
+  ) +
+
+  # ── Gap shading between Expected and Observed at x = 4 ─────────────────────
+  geom_segment(
+    data = pD_wide,
+    aes(x = 4, xend = 4,
+        y = lfc_expected, yend = lfc_combo,
+        colour = cluster, group = gene),
+    linewidth = 2.5, alpha = 0.2
+  ) +
+
+  # ── Points ──────────────────────────────────────────────────────────────────
+  # Phage
+  geom_point(
+    data = pD_wide,
+    aes(x = 1, y = lfc_phage, fill = cond_colours["phage"]),
+    size = 2.5, shape = 21,alpha=0.8
+  ) +
+  # Antibiotic
+  geom_point(
+    data = pD_wide,
+    aes(x = 2, y = lfc_ab, fill = cond_colours["ab"]),
+    size = 2.5, shape = 21,alpha=0.8
+  ) +
+  # Expected additive
+  geom_point(
+    data = pD_wide,
+    aes(x = 3, y = lfc_expected, colour = "gray40"),
+    size = 1, shape = 8, stroke = 1.0
+  ) +
+  # Observed combination
+  geom_point(
+    data = pD_wide,
+    aes(x = 4, y = lfc_combo, fill = cond_colours["combo"]),
+    size = 2.5, shape = 21,alpha=0.8
+  ) +
+
+  # ── Gene labels at observed combination ─────────────────────────────────────
+  geom_text_repel(
+    data = pD_wide,
+    aes(x = 4, y = lfc_combo,
+        label = gene, colour = cluster),
+    size           = 4,
+    fontface       = "italic",
+    nudge_x        = 0.15,
+    direction      = "y",
+    hjust          = 0,
+    segment.size   = 0.3,
+    segment.colour = "grey60",
+    show.legend    = FALSE
+  ) +
+
+  # ── Facet and scales ─────────────────────────────────────────────────────────
+  facet_wrap(~ cluster, ncol = 2, scales = "free_y") +
+
+  scale_colour_manual(values =fg_pal , guide = "none") +
+
+  scale_x_continuous(
+    breaks = 1:4,
+    labels = c("Phage", "Antibiotic", "Expected\nadditive", "Observed\ncombination"),
+    limits = c(0.7, 5.0)
+  ) +
+
+  labs(
+    x = NULL,
+    y = expression(log[2]~"fold change")
+  ) +
+
+  theme_bw() +
+  theme(
+    panel.grid.minor   = element_blank(),
+    strip.text         = element_text(size = 8.5, face = "bold"),
+    axis.text.x        = element_text(size = 8),
+    strip.background = element_blank(),
+    legend.position = "none"
+  )
+
+p_line
+```
+
+# 5  Panel D — Four-condition LFC heatmap for focal gene clusters
+
+Shows phage / antibiotic / combo / interaction LFC for the key
+resensitization-relevant gene sets discussed in the paper.
+
+```{r panel-D-data}
+# Define focal gene sets with their narrative cluster label
+focal <- tribble(
+  ~gene_name,  ~cluster,
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # ANAEROBIC RESCUE (tor/hyc/fdo)
+  # ───────────────────────────────────────────────────────────────────────────
+  # Original tor operon — TMAO reductase system
+  "torA",  "Anaerobic\nrescue\n(tor/hyc)",   # catalytic subunit, strongest interaction signal (Δ -2.83)
+  "torC",  "Anaerobic\nrescue\n(tor/hyc)",   # menaquinol electron transport component
+  "torD",  "Anaerobic\nrescue\n(tor/hyc)",   # TMAO reductase chaperone, Δ -2.63
+
+  # Original hyc operon — formate hydrogenlyase
+  "hycE",  "Anaerobic\nrescue\n(tor/hyc)",   # catalytic large subunit
+  "hycF",  "Anaerobic\nrescue\n(tor/hyc)",   # electron transfer, Δ -2.64 (strongest in hyc)
+  "hycG",  "Anaerobic\nrescue\n(tor/hyc)",   # Fe-S electron transfer subunit
+  "hycH",  "Anaerobic\nrescue\n(tor/hyc)",   # assembly/maturation factor
+
+  # NEW additions — extend the anaerobic escape story
+  "hycC",  "Anaerobic\nrescue\n(tor/hyc)",   # membrane-integral subunit of FHL — completes hyc operon picture
+  "fdhF",  "Anaerobic\nrescue\n(tor/hyc)",   # formate dehydrogenase H — feeds directly into FHL complex; shows interaction Δ -0.84
+  "dmsD",  "Anaerobic\nrescue\n(tor/hyc)",   # DMSO reductase chaperone — third anaerobic electron acceptor pathway
+                                              # showing negative interaction; broadens escape route argument beyond tor/hyc alone
+  "napG",  "Anaerobic\nrescue\n(tor/hyc)",   # periplasmic nitrate reductase Fe-S component — positive interaction (+0.72)
+                                              # contrasts with tor/hyc; shows not all anaerobic genes are blunted equally
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # PROTEOSTASIS
+  # ───────────────────────────────────────────────────────────────────────────
+  "dnaK",  "Proteostasis",   # major Hsp70 chaperone, Δ -1.37
+  "dnaJ",  "Proteostasis",   # DnaK co-chaperone, Δ -0.97
+  "groL",  "Proteostasis",   # GroEL chaperonin, Δ -0.84
+  "groS",  "Proteostasis",   # GroES co-chaperonin, Δ -1.03
+  "htpG",  "Proteostasis",   # Hsp90 homologue, Δ -0.74
+  "hslU",  "Proteostasis",   # ATPase of HslVU protease, Δ -0.85
+  "hslV",  "Proteostasis",   # peptidase of HslVU protease, Δ -0.95
+
+  # NEW additions
+  "pspA",  "Proteostasis",   # phage shock protein A — inner membrane stress sentinel
+                              # negative interaction (Δ -0.88); links phage membrane stress
+                              # to proteostatic response; mechanistically connects phage
+                              # lytic activity to the chaperone attenuation story
+  "ybeZ",  "Proteostasis",   # uncharacterised but stress-associated, Δ -0.91
+                              # co-clusters with chaperones; worth showing as part of the
+                              # broader stress response being attenuated
+  "rho",   "Proteostasis",   # transcription termination factor Rho — Δ -0.77
+                              # Rho-dependent termination shapes stress response mRNA stability;
+                              # its attenuation in combination context suggests broader
+                              # transcriptional buffering is compromised, not just translation
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # OXIDATIVE STRESS
+  # ───────────────────────────────────────────────────────────────────────────
+  "ahpC",  "Oxidative\nstress",   # alkyl hydroperoxide reductase peroxidase subunit, Δ -0.86
+  "ahpF",  "Oxidative\nstress",   # alkyl hydroperoxide reductase reductase subunit, Δ -1.09
+  "cnoX",  "Oxidative\nstress",   # chaperedoxin — thioredoxin-like, Δ -0.66
+  "dsbC",  "Oxidative\nstress",   # periplasmic disulfide isomerase, Δ -0.54
+
+  # NEW additions
+  "yqhD",  "Oxidative\nstress",   # NADPH-dependent aldehyde/lipid peroxide reductase, Δ -0.74
+                                   # protects against reactive aldehydes from lipid peroxidation;
+                                   # its attenuation links membrane disruption (phage lysis)
+                                   # to downstream aldehyde toxicity — extends oxidative story
+                                   # beyond H2O2 to lipid oxidation products
+  "ydjA",  "Oxidative\nstress",   # DRE2-like iron-sulfur cluster protein, Δ -0.66
+                                   # involved in oxidative stress and Fe-S repair;
+                                   # connects oxidative stress to iron metabolism disruption
+
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Flagellar assembly & sigma factor
+  # ───────────────────────────────────────────────────────────────────────────
+  "fliA",  "Flagella &\nchemotaxis",
+  "flgB",  "Flagella &\nchemotaxis",
+  "flgD",  "Flagella &\nchemotaxis",
+  "flgG",  "Flagella &\nchemotaxis",
+  "cheR",  "Flagella &\nchemotaxis",
+  "tap",   "Flagella &\nchemotaxis",
+  
+  # Motile-to-sessile transition
+  "rdcB",  "Biofilm\ntransition",
+  "mlrA",  "Biofilm\ntransition",
+  
+  # Fimbriae (negative interaction — contrast)
+  "fimB",  "Fimbriae",
+  "fimI",  "Fimbriae",
+    # ───────────────────────────────────────────────────────────────────────────
+  # OUTER MEMBRANE & PORINS
+  # ───────────────────────────────────────────────────────────────────────────
+  "ompF",  "Outer\nmembrane",   # frameshifted — positive interaction (+1.26) is regulatory readout only
+  "ompC",  "Outer\nmembrane",   # sole functional general diffusion porin; phage-driven repression (lfc_phage -1.74)
+  "ompW",  "Outer\nmembrane",   # massive phage-driven repression (lfc_phage -5.63) — likely receptor downregulation
+  "ompA",  "Outer\nmembrane",   # structural OMP; shared additive induction under both conditions
+
+  # NEW additions
+  "ompR",  "Outer\nmembrane",   # EnvZ/OmpR two-component response regulator — master regulator of ompC/ompF
+                                 # shared additive induction (lfc_phage +0.96, lfc_ab +0.45)
+                                 # showing both agents activate the OmpR regulon independently;
+                                 # yet ompC goes down — demonstrating post-OmpR override by phage
+                                 # This paradox is worth showing directly in the figure
+  "ompX",  "Outer\nmembrane",   # antibiotic-driven only (lfc_ab +0.67, no phage effect, no interaction)
+                                 # small OMP associated with reduced permeability;
+                                 # its antibiotic-specific induction with no phage effect
+                                 # contrasts with ompC and ompW — shows selectivity of phage membrane effects
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # ACID STRESS & AMINO ACID STRESS
+  # ───────────────────────────────────────────────────────────────────────────
+  #"cadA",  "Acid\nstress",   # lysine decarboxylase — primary acid resistance, Δ -1.21
+  #"lysU",  "Acid\nstress",   # stress-inducible lysyl-tRNA synthetase, Δ -0.73
+
+  # NEW additions
+  #"asnB",  "Acid\nstress",   # asparagine synthetase B — amino acid stress response, Δ -0.73
+                              # induced by aztreonam-avibactam alone; blunted in combination;
+                              # reflects impaired nitrogen stress buffering
+  #"cysK",  "Acid\nstress",   # cysteine synthase A — Δ -0.67
+                              # induced under cell wall/envelope stress and sulfur limitation;
+                              # connects amino acid metabolism to envelope damage response
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # ZINC HOMEOSTASIS (NDM-5 cofactor axis)
+  # ───────────────────────────────────────────────────────────────────────────
+  #"znuA",  "Zinc\nhomeostasis",   # high-affinity zinc ABC transporter periplasmic binding protein, Δ +1.50
+  #"znuC",  "Zinc\nhomeostasis",   # zinc ABC transporter ATPase, Δ +0.59
+
+  # NEW addition
+  #"feoA",  "Zinc\nhomeostasis",   # ferrous iron uptake system component, Δ -0.80
+                                   # iron and zinc homeostasis are co-regulated under oxidative stress;
+                                   # feoA negative interaction alongside znuA positive interaction
+                                   # shows the metal homeostasis axis is broadly dysregulated —
+                                   # not just zinc but iron import is disrupted, relevant to
+                                   # Fe-S cluster repair and NDM-5 active site integrity
+  
+  # ───────────────────────────────────────────────────────────────────────────
+  # MAR/ACR REGULON (no interaction — contrast group)
+  # ───────────────────────────────────────────────────────────────────────────
+  "marA",  "Mar/Acr\nregulon",   # phage-driven master activator (lfc_phage +1.98); no interaction
+  "marR",  "Mar/Acr\nregulon",   # phage-driven autorepressor (lfc_phage +1.68); no interaction
+  "acrR",  "Mar/Acr\nregulon",   # phage-driven repression of acrAB repressor (lfc_phage -1.31); no interaction
+  "acrA",  "Mar/Acr\nregulon",   # phage-driven (lfc_phage +0.61); no interaction
+  "acrB",  "Mar/Acr\nregulon",   # no significant change under any condition — key contrast point
+  "acrZ",  "Mar/Acr\nregulon",   # strongly phage-repressed (lfc_phage -2.61); no interaction
+  "tolC",  "Mar/Acr\nregulon",   # phage-driven (lfc_phage +0.87); no interaction
+
+  # NEW additions to mar/acr group
+  "acrD",  "Mar/Acr\nregulon",   # aminoglycoside-specific RND efflux; phage-repressed (lfc_phage -1.20)
+                                   # irrelevant to aztreonam mechanism but confirms phage broadly
+                                   # remodels efflux landscape independently of antibiotic
+  "acrE",  "Mar/Acr\nregulon",   # secondary efflux AcrEF — strongly phage-induced (lfc_phage +2.51)
+                                   # diverges from acrF (phage-repressed) on same operon;
+                                   # shows dissociated regulation of AcrEF components;
+                                   # no interaction for either — efflux not part of synergy
+  "marB",  "Mar/Acr\nregulon",   # no significant change — completes the mar locus picture;
+                                   # together with marA/marR shows the full operon is phage-driven
+                                   # with zero antibiotic contribution, confirming YRIK renders
+                                   # the bacteria transcriptionally blind to aztreonam-avibactam
+                                   # at the mar sensing level
+  "marC",   "Mar/Acr\nregulon"    # inner membrane protein, phage-repressed (lfc_phage -0.72);
+                                   # no interaction; completes the operon representation
+)
+heat_df <- df4 %>%
+  filter(gene.y %in% focal$gene_name) %>%
+  select(gene_name = gene.y,
+         Phage       = lfc_phage,
+         Antibiotic  = lfc_ab,
+         Combination = lfc_combo,
+         Interaction = lfc_interaction) %>%
+  distinct(gene_name, .keep_all = TRUE) %>%
+  left_join(focal, by = "gene_name") %>%
+  pivot_longer(cols = c(Phage, Antibiotic, Combination, Interaction),
+               names_to = "condition", values_to = "lfc") %>%
+  mutate(
+    condition = factor(condition,
+                       levels = c("Phage","Antibiotic","Combination","Interaction")),
+    cluster   = factor(cluster, levels = unique(focal$cluster)),
+    gene_name = factor(gene_name,
+                       levels = rev(unique(focal$gene_name)))
+  )
+```
+
+```{r panel-D-plot}
+lfc_limit <- 8
+
+p_heat <- ggplot(heat_df,
+             aes(x = condition, y = gene_name, fill = lfc)) +
+  geom_tile(colour = "gray70", linewidth = 0.4) +
+  geom_text(aes(label = round(lfc, 1)),
+            size = 3, colour = "black",
+            fontface = "bold",
+            data = filter(heat_df, abs(lfc) >= 0.8)) +
+  facet_grid(cluster ~ ., scales = "free_y",
+             space = "free_y", switch = "y",) +
+  scale_fill_gradientn(
+    colours = c("#1565C0", "#42A5F5", "#E3F2FD",
+                "white",
+                "#FFEBEE", "#EF5350", "#B71C1C"),
+    values  = rescale(c(-lfc_limit, -2, -0.5, 0, 0.5, 2, lfc_limit)),
+    limits  = c(-lfc_limit, lfc_limit),
+    oob     = squish,
+    name    = expression(log[2]*"FC"),
+    guide   = guide_colourbar(
+      direction      = "horizontal",
+      title.position = "left",
+      title.vjust    = 1,
+      barwidth       = unit(6, "cm"),
+      barheight      = unit(0.4, "cm")
+    )
+  ) +
+  # vertical line separating mono-therapies from interaction column
+  geom_vline(xintercept = 3.5, colour = "grey30",
+             linewidth = 0.8, linetype = "solid") +
+  labs(
+    #title    = "D  LFC heatmap — focal resensitization gene clusters (4 h)",
+    #subtitle = "Left of line: observed LFC per condition; right: interaction coefficient (Δlog₂FC)",
+    x        = NULL,
+    y        = NULL
+  ) +
+  theme_classic(base_size = 9.5) +
+  theme(
+    plot.title         = element_text(face = "bold", size = 12),
+    plot.subtitle      = element_text(colour = "grey40", size = 8),
+    axis.text.y        = element_text(size = 8, face = "italic"),
+    axis.text.x        = element_text(size = 9, colour = "black",
+                                      face = c("plain","plain","plain","bold")),
+    strip.text.y.left  = element_text(angle = 0, hjust = 0.5,
+                                      size = 9, face = "bold"),
+    strip.placement    = "outside",
+    strip.background   = element_rect(fill = "#FAFAFA", colour = "gray70"),
+    panel.grid         = element_blank(),
+    panel.spacing      = unit(0.15, "lines"),
+    legend.position = "top",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.justification = "center",
+  )
+
+p_heat
+```
+
+---
+
+```{r}
+
+
+((p_scatter / p_line) | p_heat )+ plot_layout(widths = c(1.2,0.8)) + 
+  plot_annotation(tag_levels = list(c("A","C","B")))
+
+ggsave("./figures/interaction_panel.pdf",width=12,height = 13,device="pdf")
+ggsave("./figures/interaction_panel.png",width=12,height = 13,device="png",dpi=300)
+```
+

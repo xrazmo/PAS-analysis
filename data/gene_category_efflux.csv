@@ -1,0 +1,38 @@
+﻿gene_name,category
+tolC,Efflux
+acrB,Efflux
+acrA,Efflux
+acrR,Efflux
+acrZ,Efflux
+acrD,Efflux
+acrE,Efflux
+acrF,Efflux
+mdtG,Efflux
+mdtH,Efflux
+mdtI,Efflux
+mdtJ,Efflux
+mdtA,Efflux
+mdtB,Efflux
+mdtC,Efflux
+mdtD,Efflux
+mdtE,Efflux
+mdtF,Efflux
+mdtL,Efflux
+mdtP,Efflux
+mdtO,Efflux
+mdtN,Efflux
+mdtK,Efflux
+marC,Efflux regulator
+marR,Efflux regulator
+marA,Efflux regulator
+marB,Efflux regulator
+soxS,Efflux regulator
+soxR,Efflux regulator
+rob,Efflux regulator
+ompC,Porin
+ompF,Porin
+ompG,Porin
+ompL,Porin
+ompN,Porin
+ompW,Porin
+ompX,Porin

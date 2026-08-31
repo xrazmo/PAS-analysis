@@ -7,7 +7,7 @@ output: html_document
 
 ## Load Libraries
 
-```{r load-libraries}
+```{r load-libraries, message=F}
 rm(list=ls())
 library(tidyverse)
 library(dplyr)
@@ -18,7 +18,7 @@ library(pheatmap)
 library(ggplot2)
 
 # Source custom functions
-source("transcriptomics_functions.R")
+source("transcriptomics_functions_v2.R")
 
 out_dir = "./export/"
 ```
@@ -87,7 +87,7 @@ run_gsea_base("./export/model_out","./export/kegg_gsea")
 
 ```{r}
 
-source("transcriptomics_functions.R")
+source("transcriptomics_functions_v2.R")
 gsea_all <- read.csv('./export/kegg_gsea/gsea_all_3_cat.csv')
 pathway_category <- read.csv('./export/kegg_gsea/pathway_category.csv')
 plot_pathway_dotplot(gsea_all,pathway_category) 
@@ -95,13 +95,6 @@ plot_pathway_dotplot(gsea_all,pathway_category)
 
 ```
 
-```{r}
-library(dplyr)
-library(tidyr)
-
-
-
-```
 
 
 
@@ -110,7 +103,7 @@ library(tidyr)
 library(patchwork)
 library(ggplotify)
 
-source("transcriptomics_functions.R")
+source("transcriptomics_functions_v2.R")
 pvenn_res <- plot_venn_diagram('./export/model_out/')
 write.csv(pvenn_res$count,"./export/count_venn_diagram.csv")
 ppcoa_res <- plot_pcoa(counts_filt,metadata_filt)
@@ -127,133 +120,246 @@ p<- ( ppcoa /  pvenn_res$fig) + plot_layout(heights = c(0.8, 1.2))
 ggsave('./figures/pcoa_venn_heatmap.pdf',device='pdf',height = 11,width = 12)
 
 ```
+PERMANOVA
+```{r}
+
+
+permanova_out <- run_permanova(counts = counts_filt, metadata = metadata_filt,
+                                permutations = 9999, seed = 42)
+```
+```{r}
+library(vegan)
+library(readr)
+library(DESeq2)
+
+# ── 1. Build VST distance matrix ───────────────────────────────
+message("Building VST distance matrix...")
+
+dds <- DESeqDataSetFromMatrix(
+  countData = counts_filt,
+  colData = metadata_filt,
+  design = ~1
+)
+
+# Filter low-count genes
+keep <- rowSums(counts(dds) >= 10) >= 3
+dds <- dds[keep, ]
+
+dds <- estimateSizeFactors(dds)
+
+# Variance Stabilizing Transformation
+vst_counts <- vst(dds, blind = TRUE)
+vst_mat <- t(assay(vst_counts))   # samples × genes
+
+# Compute Euclidean distance
+dist_obj <- dist(vst_mat, method = "euclidean")
+
+# Convert dist object to full symmetric matrix
+dist_matrix <- as.matrix(dist_obj)
+
+# Optional: Ensure clean row and column names
+rownames(dist_matrix) <- rownames(vst_mat)
+colnames(dist_matrix) <- rownames(vst_mat)
+
+# Save as TSV (proper matrix format)
+write_tsv(
+  as.data.frame(dist_matrix) %>% tibble::rownames_to_column("fname"),
+  "./export/pcoa_vst_mat_euclidean.tsv",
+  col_names = TRUE
+)
+write_tsv(
+  metadata,
+  "./export/metadata.tsv",
+  col_names = TRUE
+)
+export_counts <- as.data.frame(t(counts_filt)) %>% tibble::rownames_to_column("fname")
+write_tsv(
+  export_counts,
+  "./export/raw_counts.tsv",
+  col_names = TRUE
+)
+message("Distance matrix successfully saved to 'pcoa_vst_mat_euclidean.tsv'")
+```
+
+
 
 
 
 ## combo vs mono therapy
 ```{r}
 
-source("transcriptomics_functions.R")
+source("transcriptomics_functions_v2.R")
 df_response <- assess_interactions(in_dir="./export/model_out/",
                                   out_dir = "./export/interaction/",
                                    annotation = annotation)
 
 
 ```
+
 ```{r}
-rm(list=ls())
+rm(list = ls())
 library(dplyr)
 library(tidyr)
 library(ggplot2)
 library(ggsankey)
 
 df_gene <- read.csv("./export/interaction/combo_therapy_responses.csv")
-# ==========================================================
-# TRUE GENE TRANSITION SANKEY (1h → 4h → 24h) with visible 24h nodes
-# ==========================================================
 
-# -------- PARAMETERS --------
-tp_levels <- c("1h", "4h", "24h", "END")   # END is hidden stage
-classes_levels <- c("No significant change","Antibiotic-driven (no interaction)",
-                    "Phage-driven (no interaction)","Interaction-defined (Non-additive)")
+# ==========================================================================
+# TRUE GENE TRANSITION SANKEY (1h → 4h → 24h)
+# ==========================================================================
+# FIXES APPLIED:
+#   BUG-1  edges_1 was built from a 3-way table(1h, 4h, 24h): the Freq
+#          column counted triplets (unique 1h/4h/24h combos), not 1h→4h
+#          pairwise flows. Var3 was silently dropped, inflating counts.
+#          Fixed: use separate 2-way tables for each transition.
+#
+#   BUG-2  dplyr::first(na_rm = TRUE) is not a valid argument — na_rm
+#          does not exist in dplyr::first(). Fixed: na.omit() wrapper.
+#
+#   BUG-3  "Shared (additive, no interaction)" category (added in
+#          transcriptomics_functions_fixed.R) was missing from
+#          classes_levels and class_cols, causing factor/color warnings.
+#          Added with a distinct colour.
+#
+#   BUG-4  margins = margin(...) is not a valid theme() argument.
+#          Fixed: plot.margin = margin(...).
+#
+#   BUG-5  size = .3 is deprecated for line geoms in ggplot2 ≥ 3.4.
+#          Fixed: linewidth = .3.
+
+# ── PARAMETERS ──────────────────────────────────────────────────────────────
+tp_levels <- c("1h", "4h", "24h", "END")   # END is a hidden sink stage
+
+# BUG-3: added "Shared (additive, no interaction)" to match fixed classifier
+classes_levels <- rev(c(
+  "No significant change",
+  "Antibiotic-driven (no interaction)",
+  "Shared (additive, no interaction)",
+  "Phage-driven (no interaction)",
+  "Interaction-defined (Non-additive)"
+))
+
 nochange_label <- "No significant change"
 
-# -------- INPUT --------
-# df_gene must have columns: gene, time_point, response_class
-
-# -------- 1) COMPLETE GENE × TIME GRID (fill missing with No change) --------
+# ── 1) COMPLETE GENE × TIME GRID ────────────────────────────────────────────
 df_long_full <- df_gene %>%
   mutate(time_point = factor(time_point, levels = tp_levels[1:3])) %>%
   complete(gene, time_point, fill = list(response_class = nochange_label)) %>%
   group_by(gene, time_point) %>%
-  summarise(response_class = first(response_class), .groups = "drop")
+  summarise(
+    # BUG-2: dplyr::first() has no na_rm argument; use na.omit() wrapper
+    response_class = dplyr::first(na.omit(response_class)),
+    .groups = "drop"
+  )
 
-# -------- 2) WIDE FORMAT --------
+# ── 2) WIDE FORMAT ───────────────────────────────────────────────────────────
 df_wide <- df_long_full %>%
   pivot_wider(names_from = time_point, values_from = response_class)
 
-# -------- 3) REMOVE GENES ALWAYS NO CHANGE --------
+# ── 3) REMOVE GENES ALWAYS "NO CHANGE" ──────────────────────────────────────
 df_wide <- df_wide %>%
   filter(!if_all(all_of(tp_levels[1:3]), ~ .x == nochange_label))
 
-# -------- 4) BUILD TRANSITIONS (1h→4h and 4h→24h) --------
-edges_1 <- df_wide %>%
-  count(`1h`, `4h`, name = "value") %>%
-  rename(node = `1h`, next_node = `4h`) %>%
+# ── 4) BUILD TRANSITIONS ─────────────────────────────────────────────────────
+# BUG-1: each transition uses its own 2-way table; no Var3 / triplet issue.
+
+edges_1 <- as.data.frame(table(`1h` = df_wide$`1h`, `4h` = df_wide$`4h`)) %>%
+  rename(node = `X1h`, next_node = `X4h`, value = Freq) %>%
   mutate(x = "1h", next_x = "4h")
 
-edges_2 <- df_wide %>%
-  count(`4h`, `24h`, name = "value") %>%
-  rename(node = `4h`, next_node = `24h`) %>%
+edges_2 <- as.data.frame(table(`4h` = df_wide$`4h`, `24h` = df_wide$`24h`)) %>%
+  rename(node = `X4h`, next_node = `X24h`, value = Freq) %>%
   mutate(x = "4h", next_x = "24h")
 
 edges <- bind_rows(edges_1, edges_2) %>%
   filter(value > 0) %>%
   mutate(
-    x = factor(x, levels = tp_levels),
-    next_x = factor(next_x, levels = tp_levels),
-    node = as.character(node),
+    x         = factor(x,         levels = tp_levels),
+    next_x    = factor(next_x,    levels = tp_levels),
+    node      = as.character(node),
     next_node = as.character(next_node)
   )
 
-# -------- 5) ADD OUTGOING EDGES FROM 24h TO END (forces 24h nodes) --------
+# ── 5) ADD OUTGOING EDGES FROM 24h → END (forces 24h nodes to render) ───────
 edges_end <- edges %>%
   filter(next_x == "24h") %>%
   group_by(next_node) %>%
   summarise(value = sum(value), .groups = "drop") %>%
   transmute(
-    x = factor("24h", levels = tp_levels),
-    next_x = factor("END", levels = tp_levels),
-    node = as.character(next_node),
-    next_node = "__END__",      # sink node label
-    value = value
+    x         = factor("24h", levels = tp_levels),
+    next_x    = factor("END", levels = tp_levels),
+    node      = as.character(next_node),
+    next_node = "__END__",
+    value     = value
   )
 
-edges_plot <- bind_rows(edges, edges_end)
-
-edges_plot <- edges_plot %>%
+edges_plot <- bind_rows(edges, edges_end) %>%
   mutate(
-    node = factor(node, levels = classes_levels),
+    node      = factor(node,      levels = c(classes_levels, "__END__")),
     next_node = factor(next_node, levels = c(classes_levels, "__END__"))
   )
 
-# -------- 6) COLORS (make sink transparent) --------
+# ── 6) COLORS ────────────────────────────────────────────────────────────────
+# BUG-3: "Shared (additive, no interaction)" given its own colour
+class_cols <- c(
+  "No significant change"                 = "#BFC9D1",
+  "Antibiotic-driven (no interaction)"    = "#48A111",
+  "Shared (additive, no interaction)"     = "#F4A824",
+  "Phage-driven (no interaction)"         = "#3396D3",
+  "Interaction-defined (Non-additive)"    = "#C40C0C",
+  "__END__"                               = "transparent"
+)
 
-class_cols <- c("No significant change"="#FFE797",
-                "Antibiotic-driven (no interaction)"="#FF6500",
-                "Phage-driven (no interaction)"="#008BFF",
-                "Interaction-defined (Non-additive)"="#C40C0C",
-                "__END__"="transparent")
-
-# -------- 7) PLOT --------
-ggplot(edges_plot,
-            aes(x = x, next_x = next_x,
-                node = node, next_node = next_node,
-                value = value,
-                fill = node)) +
-  geom_sankey(flow.alpha = 0.6, node.color = NULL) +
-  scale_fill_manual(values = class_cols, breaks = setdiff(names(class_cols), "__END__")) +
+# ── 7) PLOT ──────────────────────────────────────────────────────────────────
+p <- ggplot(
+  edges_plot,
+  aes(
+    x         = x,
+    next_x    = next_x,
+    node      = node,
+    next_node = next_node,
+    value     = value,
+    fill      = node
+  )
+) +
+  geom_sankey(flow.alpha = 0.6, node.color = NA) +
+  scale_fill_manual(
+    values = class_cols,
+    breaks = setdiff(names(class_cols), "__END__")
+  ) +
   scale_x_discrete(
     labels = c("1h" = "1h", "4h" = "4h", "24h" = "24h"),
-    expand = expansion(add = c(0.1, 0.1)) # reduce space between legend and plot
+    expand = expansion(add = c(0.1, 0.1))
   ) +
-  labs(x="Time Point", y= "")+
+  labs(x = "Time Point", y = "") +
   theme_sankey() +
-  theme(axis.text.x = element_text(size=12),
-        #legend.position = c(0.4, 0.99),
-        #legend.justification = c(1, 1),
-        legend.position = "top",
-        #legend.direction = "horizontal",
-        legend.title = element_text(hjust = 0.5,size=9,face = "bold"),
-        legend.text = element_text(size=9),
-        legend.margin = margin(t = 3, r = 0, b = 3, l = 0, unit = "pt"),
-        margins =margin(t = 0, r = 0, b = 0, l = 0, unit = "pt"),
-        panel.grid.major.x = element_line(linetype='longdash',size=.3,color="gray80")) +
-  guides(fill = guide_legend(title = "Response Classes",
-                             ncol=4,title.position = "top"))
+  theme(
+    axis.text.x    = element_text(size = 12),
+    legend.position  = "top",
+    legend.title     = element_text(hjust = 0.5, size = 9, face = "bold"),
+    legend.text      = element_text(size = 9),
+    legend.margin    = margin(t = 3, r = 0, b = 3, l = 0, unit = "pt"),
+    plot.margin      = margin(t = 0, r = 0, b = 0, l = 0, unit = "pt"),  
+    panel.grid.major.x = element_line(
+      linetype  = "longdash",
+      linewidth = 0.3,       
+      color     = "gray80"
+    )
+  ) +
+  guides(fill = guide_legend(
+    title          = "Response Classes",
+    ncol           = 4,
+    title.position = "top"
+  ))
 
+ggsave("./figures/response_classes_sankey.pdf",  #
+       plot   = p,
+       device = "pdf",
+       width  = 9,
+       height = 6)
 
-ggsave("./figures/response_classes_snakey.pdf",device='pdf',width=7,height = 6)
+p
 
 ```
 
@@ -270,13 +376,14 @@ plot_combo_response_chicklets <- function(
   gene_category = NULL,
   label_font_pt = 9,
   label_color = "#435663",
-  color_set = c(phage = "#A0C878", ab = "#6BC5D2", combo = "#F564A9",
-                pos_inter = "#D32D2D", neg_inter = "#3A9AFF"),
+  color_set = c(phage = "#3396D3", ab = "#48A111", combo = "#982598",
+                pos_inter = "#BF092F", neg_inter = "#0046FF"),
   label_set = c(ab = "Antibiotic Only", phage = "Phage Only",
                 combo = "Antibiotic + Phage",
                 neg_inter = "Negative Interaction",
                 pos_inter = "Positive Interaction"),
   padj_cutoff = 0.05,
+  timepoint = NULL,
   data_cols = c("lfc_ab", "lfc_phage", "lfc_combo", "lfc_interaction"),
   widths = c(4, 2),
   legend_position = "bottom",
@@ -318,7 +425,7 @@ plot_combo_response_chicklets <- function(
 
   # ---- filter + rename + padj-gating ----
   df <- data %>%
-    dplyr::filter(.data$response_class == !!response_class) %>%
+    dplyr::filter(.data$response_class == !!response_class & !is.na(locus_tag)) %>%
     dplyr::rename(gene_name = `gene.y`) %>%
     dplyr::mutate(
       lfc_phage       = ifelse(.data$padj_phage       < padj_cutoff, .data$lfc_phage,       0),
@@ -326,8 +433,12 @@ plot_combo_response_chicklets <- function(
       lfc_combo       = ifelse(.data$padj_combo       < padj_cutoff, .data$lfc_combo,       0),
       lfc_interaction = ifelse(.data$padj_interaction < padj_cutoff, .data$lfc_interaction, 0)
     )
-
-  lvls <- rev(c("ab", "phage", "combo", "pos_inter", "neg_inter", "zero_inter"))
+  
+  if(!is.null(timepoint)){
+    df <- df %>% filter(time_point %in% timepoint)
+  }
+  
+  lvls <- c("ab", "phage", "combo", "pos_inter", "neg_inter", "zero_inter")
   filter_col <- c("gene", "gene_name", "time_point", data_cols)
 
   # ---- pivot long ----
@@ -354,8 +465,12 @@ plot_combo_response_chicklets <- function(
   # ---- labels + ordering ----
   if (!is.null(gene_category)) {
     df_piv <- df_piv %>%
-      merge(gene_category, by = "gene_name", all.x = TRUE) %>%
-      dplyr::arrange(.data$functional_group) %>%
+      merge(gene_category, by = "gene_name", all.x = TRUE) %>% distinct() %>%
+      dplyr::arrange(.data$functional_group,.data$gene_name)
+    
+    write.csv(df_piv,paste0("./export/__response_calss_",sub(" ", "_", response_class),"_",paste0(timepoint, collapse='"-"'),".csv"))
+    
+    df_piv <- df_piv %>%
       dplyr::mutate(
         gorder = dplyr::row_number(),
         label = paste0(
@@ -372,7 +487,7 @@ plot_combo_response_chicklets <- function(
         label = paste0("***", xfun::html_escape(.data$gene_name), "***")
       )
   }
-
+ 
   # ---- panel heights ----
   height_df <- df_piv %>%
     dplyr::group_by(.data$time_point) %>%
@@ -381,18 +496,17 @@ plot_combo_response_chicklets <- function(
 
   # ---- shared theme + legend guide ----
  custome_theme <- ggplot2::theme(
-  plot.text = ggplot2::element_text(size = 9),
-  axis.title = ggplot2::element_text(size = 9),
-  axis.title.y = ggplot2::element_text(size = 9),
-  axis.title.x = ggplot2::element_text(size = 9),
+  plot.text = ggplot2::element_text(size = 10),
+  axis.title.y = ggplot2::element_text(size = 12,face="bold"),
+  axis.title.x = ggplot2::element_text(size = 12,face = "bold"),
   axis.text.y = ggtext::element_markdown(size = 9),
-  axis.text.y.left = ggtext::element_markdown(size = 9),
+  axis.text.y.left = ggtext::element_markdown(size = 11),
   axis.text.y.right = ggtext::element_markdown(size = 9),
-  plot.title = ggplot2::element_text(hjust = 0.5,size = 8,face = "bold"),
-  legend.text = ggplot2::element_text(size = 8),
-  legend.title = ggplot2::element_text(size = 8,face='bold'),
+  plot.title = ggplot2::element_text(hjust = 0.5,size = 12,face = "bold"),
+  legend.text = ggplot2::element_text(size = 10),
+  legend.title = ggplot2::element_text(size = 9,face='bold'),
   panel.grid.minor.x = ggplot2::element_blank(),
-  panel.grid.major.x = ggplot2::element_line(linetype = "dashed", linewidth = .3)
+  panel.grid.major.x = ggplot2::element_line(linetype = "dashed", linewidth = .4)
 )
 
 
@@ -407,19 +521,19 @@ plot_combo_response_chicklets <- function(
   # ---- left plot (B) ----
   dleft <- df_piv %>% dplyr::filter(.data$group2 == "B")
 
-  p_left <- ggplot2::ggplot(dleft, ggplot2::aes(x = reorder(.data$gene_name, .data$gorder),
+  p_left <- ggplot2::ggplot(dleft, ggplot2::aes(x = reorder(.data$label, .data$gorder),
                                                y = .data$LFC, color = .data$group, fill = .data$group)) +
     geom_chicklet(
-      ggplot2::aes(x = reorder(.data$gene_name, .data$gorder), y = .data$LFC, color = .data$group),
+      ggplot2::aes(x = reorder(.data$label, .data$gorder), y = .data$LFC, color = .data$group),
       position = ggplot2::position_dodge2(reverse = TRUE, padding = 0.3),
-      size = .3, fill = "white", width = 0.6, radius = grid::unit(2, "pt"),
+      size = .3, fill = "white", width = 0.8, radius = grid::unit(2, "pt"),
       na.rm = TRUE, show.legend = FALSE
     ) +
     geom_chicklet(
-      ggplot2::aes(x = reorder(.data$gene_name, .data$gorder), y = .data$LFC, color = .data$group, fill = .data$group),
+      ggplot2::aes(x = reorder(.data$label, .data$gorder), y = .data$LFC, color = .data$group, fill = .data$group),
       alpha = 0.8,
       position = ggplot2::position_dodge2(reverse = TRUE, padding = 0.3),
-      width = 0.6, size = .3, radius = grid::unit(2, "pt"),
+      width = 0.8, size = .3, radius = grid::unit(2, "pt"),
       na.rm = TRUE, show.legend = TRUE
     ) +
     ggplot2::geom_hline(yintercept = 0, color = "grey60", linewidth = 0.5, linetype = "dashed") +
@@ -434,7 +548,7 @@ plot_combo_response_chicklets <- function(
       name = "Response classes"
     ) +
     ggplot2::scale_color_manual(values = color_set, guide = "none") +
-    ggplot2::labs(x = "", title = "Treatment-specific effects",tag=tag) +
+    ggplot2::labs(x = "Genes (Functional group)", title = "Treatment-specific effects",tag=tag,y="Log2(Fold Change)") +
     ggplot2::theme_minimal() + custome_theme +
     ggh4x::facetted_pos_scales(x = lapply(height_df$height, function(h) ggplot2::scale_x_discrete())) +
     ggh4x::force_panelsizes(rows = height_df$height) +
@@ -444,21 +558,21 @@ plot_combo_response_chicklets <- function(
   # ---- right plot (I) ----
   dright <- df_piv %>% dplyr::filter(.data$group2 == "I")
 
-  p_right <- ggplot2::ggplot(dright, ggplot2::aes(x = reorder(.data$gene_name, .data$gorder),
+  p_right <- ggplot2::ggplot(dright, ggplot2::aes(x = reorder(.data$label, .data$gorder),
                                                  y = .data$LFC, color = .data$group, fill = .data$group)) +
-    geom_bar(aes(x = reorder(.data$gene_name, .data$gorder,color = .data$group, fill = .data$group,y = .data$LFC)), stat='identity',
+    geom_bar(aes(x = reorder(.data$label, .data$gorder,color = .data$group, fill = .data$group,y = .data$LFC)), stat='identity',
       position = ggplot2::position_dodge2(reverse = TRUE, padding = 0.3),alpha = 0.6,
-       width = 0.1, radius = grid::unit(2, "pt"),
+       width = 0.3, radius = grid::unit(2, "pt"),
       na.rm = TRUE, show.legend = FALSE
     ) +
     # geom_chicklet(
-    #   ggplot2::aes(x = reorder(.data$gene_name, .data$gorder), y = .data$LFC, color = .data$group),
+    #   ggplot2::aes(x = reorder(.data$label, .data$gorder), y = .data$LFC, color = .data$group),
     #   position = ggplot2::position_dodge2(reverse = TRUE, padding = 0.3),
     #   size = .3, fill = "white", width = 0.1, radius = grid::unit(2, "pt"),
     #   na.rm = TRUE, show.legend = FALSE
     # ) +
     # geom_chicklet(
-    #   ggplot2::aes(x = reorder(.data$gene_name, .data$gorder), y = .data$LFC, color = .data$group, fill = .data$group),
+    #   ggplot2::aes(x = reorder(.data$label, .data$gorder), y = .data$LFC, color = .data$group, fill = .data$group),
     #   alpha = 0.6,
     #   position = ggplot2::position_dodge2(reverse = TRUE, padding = 0.3),
     #   width = 0.1, size = .1, radius = grid::unit(2, "pt"),
@@ -476,7 +590,7 @@ plot_combo_response_chicklets <- function(
       name = "Response classes"
     ) +
     ggplot2::scale_color_manual(values = color_set, guide = "none") +
-    ggplot2::labs(x = "", title = "Interaction effect") +
+    ggplot2::labs(x = "", title = "Interaction effect",y="\u0394Log2(Fold Change)") +
     ggplot2::theme_minimal() + custome_theme +
     ggplot2::theme(axis.text.y.left = ggplot2::element_blank(),
                    axis.ticks.y = ggplot2::element_blank(),plot.tag = element_blank()) +
@@ -503,27 +617,19 @@ plot_combo_response_chicklets <- function(
   )
 }
 
-fant <- plot_combo_response_chicklets(data_path = "./export/interaction/combo_therapy_responses.csv",
-                                        response_class = "Antibiotic-amplified-by-phage",
-                                         gene_category_path = "./data/gene_category.csv",tag="A")
+finter <- plot_combo_response_chicklets(data_path = "./export/interaction/combo_therapy_responses.csv",
+                                        response_class = "Interaction-defined (Non-additive)",
+                                         gene_category_path = "./data/gene_category.csv",timepoint=c("4h"),tag="")
 
-fcom <- plot_combo_response_chicklets(data_path = "./export/interaction/combo_therapy_responses.csv",
-                                        response_class = "Combination-specific",
-                                         gene_category_path = "./data/gene_category.csv",tag="B")
+finter$plot
+# p0 <- (fant$p_left | fant$p_right)  + plot_layout(width= c(3,1))
+#                                                   
+# p1 <-  (((fcom$p_left | fcom$p_right)+ plot_layout(width= c(3,1))) / ((fpha$p_left | fpha$p_right) + plot_layout(width= c(3,1)))) + plot_layout(heights = c(2,3))
+#                                                                                  
+# p <- (p0 | p1) 
 
-fpha <- plot_combo_response_chicklets(data_path = "./export/interaction/combo_therapy_responses.csv",
-                                        response_class = "Phage-modified-by-antibiotic",
-                                         gene_category_path = "./data/gene_category.csv",tag= "C")
-
-
-p0 <- (fant$p_left | fant$p_right)  + plot_layout(width= c(3,1))
-                                                  
-p1 <-  (((fcom$p_left | fcom$p_right)+ plot_layout(width= c(3,1))) / ((fpha$p_left | fpha$p_right) + plot_layout(width= c(3,1)))) + plot_layout(heights = c(2,3))
-                                                                                 
-p <- (p0 | p1) 
-
-p+ plot_layout(width= c(4,1,3,1), guides = 'collect') & theme(legend.position = 'bottom')
-ggsave('./figures/response_classes_v2.pdf',device='pdf',width=9,height=7)
+# p+ plot_layout(width= c(4,1,3,1), guides = 'collect') & theme(legend.position = 'bottom')
+ggsave('./figures/interaction_4h.pdf',device = cairo_pdf,width=12,height=15)
 ```
 
 ```{r}

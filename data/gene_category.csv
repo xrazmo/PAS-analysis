@@ -1,0 +1,65 @@
+﻿gene_name,functional_group,biological_role
+cadA,Acid stress & amino acid metabolism,Lysine decarboxylase involved in acid resistance and amino acid metabolism
+ecpA,Adhesion & fimbriae,Common pilus major subunit involved in surface attachment
+fimI,Adhesion & fimbriae,Type 1 fimbrial structural component
+fimB,Adhesion & fimbriae,Recombinase regulating phase variation of type 1 fimbriae
+hycE,Anaerobic respiration & redox metabolism,Formate hydrogenlyase catalytic subunit
+hycG,Anaerobic respiration & redox metabolism,Formate hydrogenlyase subunit
+hycH,Anaerobic respiration & redox metabolism,Formate hydrogenlyase assembly factor
+fdnG,Anaerobic respiration & redox metabolism,Formate dehydrogenase-N catalytic subunit
+hyaB,Anaerobic respiration & redox metabolism,Hydrogenase-1 large subunit
+hycD,Anaerobic respiration & redox metabolism,Formate hydrogenlyase membrane component
+hycF,Anaerobic respiration & redox metabolism,Formate hydrogenlyase electron transfer subunit
+torA,Anaerobic respiration & redox metabolism,TMAO reductase catalytic subunit
+ubiT,Anaerobic respiration & redox metabolism,Ubiquinone biosynthesis accessory factor
+torD,Anaerobic respiration & redox metabolism,TMAO reductase chaperone
+torC,Anaerobic respiration & redox metabolism,Menaquinol-dependent electron transport component
+mlrA,Biofilm & surface regulation,Transcriptional regulator of curli and biofilm formation
+wzc,Capsule & LPS assembly,Tyrosine autokinase regulating capsule and surface polysaccharide export
+scrK_1,Carbohydrate metabolism,Fructokinase involved in central carbon metabolism
+fucU,Carbohydrate metabolism,L-fucose mutarotase in fucose utilization
+lacA,Carbohydrate metabolism,Galactoside O-acetyltransferase in lactose operon
+rbsD,Carbohydrate metabolism,D-ribose pyranase in ribose pathway
+ycjX,Carbohydrate metabolism,Putative oxidoreductase associated with sugar metabolism
+galK,Carbohydrate metabolism,Galactokinase in galactose utilization
+idnT,Carbohydrate transport & metabolism,Transporter for alternative carbon sources
+lacY,Carbohydrate transport & metabolism,Lactose permease
+creA,Carbon metabolism regulation,Regulator of central carbon metabolism
+recF,DNA replication & repair,Recombination mediator in homologous recombination
+dnaA,DNA replication & repair,Chromosomal replication initiator protein
+acrZ,Efflux & antibiotic resistance,AcrAB-TolC efflux accessory protein
+tap,Efflux & antibiotic resistance,Multidrug efflux transporter (MFS family)
+yqaE,Envelope homeostasis,Pmp3-family membrane protein involved in envelope stability
+yacC,Envelope stress & lipoproteins,Putative stress-associated lipoprotein
+yaiZ,Envelope-associated protein,Putative membrane protein
+flgB,Flagellar assembly & motility,Flagellar basal-body rod protein
+flgD,Flagellar assembly & motility,Hook assembly initiation protein
+flgG,Flagellar assembly & motility,Flagellar basal-body rod protein
+cheR,Flagellar assembly & motility,Chemotaxis signaling methyltransferase
+cspE,Global stress response,RNA chaperone involved in stress adaptation
+rsd,Global transcriptional regulation,Sigma factor regulator
+fhuF,Iron acquisition & siderophore metabolism,Ferric-siderophore reductase
+yhjX,Membrane transport & metabolic adaptation,Putative stress-associated transporter
+yeaV,Membrane transport & stress adaptation,Putative transporter linked to stress response
+ompF,Outer membrane permeability & porins,Major porin controlling antibiotic influx
+chiP,Outer membrane permeability & porins,Chitooligosaccharide-specific porin
+lpp,Outer membrane structure,Murein lipoprotein anchoring OM to peptidoglycan
+ahpF,Oxidative stress response,Alkyl hydroperoxide reductase component
+pstS,Phosphate acquisition & nutrient uptake,Periplasmic phosphate ABC transporter component
+puuA,Polyamine metabolism,Glutamate-putrescine ligase
+puuD,Polyamine metabolism,γ-glutamyl-γ-aminobutyraldehyde dehydrogenase
+puuB,Polyamine metabolism,Putrescine catabolism enzyme
+dnaJ,Protein quality control & stress,DnaK co-chaperone
+dnaK,Protein quality control & stress,Major heat shock chaperone
+yjfN,Protein quality control & stress,Protease activator under stress
+hslV,Protein quality control & stress,ATP-dependent protease subunit
+aldA,Redox & detoxification metabolism,Aldehyde dehydrogenase
+rdcB,Second messenger signaling,c-di-GMP regulatory protein
+yecD,Stress-associated metabolism,Isochorismatase family protein
+ymiA,Stress-associated protein,Predicted stress-associated membrane protein
+ybeZ,Stress-associated protein,PhoH-like protein linked to starvation response
+ytfK,Stringent response regulation,Modulator of ppGpp metabolism
+ppdA,Surface assembly & secretion,Pseudopilin component of type II secretion
+relB,Toxin–antitoxin & persistence,RelBE antitoxin regulating stress survival
+tuf1,Translation machinery,Elongation factor Tu
+znuA,Zinc acquisition & metal homeostasis,High-affinity zinc transporter component

@@ -1,0 +1,296 @@
+---
+title: "Transcriptomics Analysis Example"
+author: "Your Name"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: show
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Setup
+
+## Load Libraries
+
+```{r load-libraries}
+library(tidyverse)
+library(readxl)
+library(DESeq2)
+library(sva)
+library(pheatmap)
+library(ggplot2)
+
+# Source custom functions
+source("transcriptomics_functions.R")
+```
+
+# Method 1: Using the Complete Pipeline
+
+This is the simplest approach - one function call does everything:
+
+```{r pipeline-simple}
+# Run complete pipeline
+results <- run_deseq2_pipeline(
+  counts_path = './output/count_data_all.csv',
+  metadata_path = "data/metadata_ecphage.xlsx",
+  annotation_path = "./output/22ET500456__with-ecolik12.csv",
+  design_formula = "~ time_point + antibiotic + phage + ab_conc",
+  min_count = 10,
+  use_sva = TRUE,
+  metadata_filter_col = "comment",
+  metadata_filter_pattern = "missing",
+  fname_col = "fname"
+)
+
+# Extract components
+counts <- results$counts
+metadata <- results$metadata
+annotation <- results$annotation
+dds <- results$dds
+vsd <- results$vsd
+svobj <- results$sva
+```
+
+# Method 2: Step-by-Step Approach
+
+If you want more control, use individual functions:
+
+```{r step-by-step, eval=FALSE}
+# Step 1: Load data
+data_list <- load_transcriptomics_data(
+  counts_path = './output/count_data_all.csv',
+  metadata_path = "data/metadata_ecphage.xlsx",
+  annotation_path = "./output/22ET500456__with-ecolik12.csv",
+  metadata_filter_col = "comment",
+  metadata_filter_pattern = "missing",
+  fname_col = "fname"
+)
+
+counts <- data_list$counts
+metadata <- data_list$metadata
+annotation <- data_list$annotation
+
+# Step 2: Create DESeq2 object with SVA
+deseq_results <- create_deseq2_dataset(
+  counts = counts,
+  metadata = metadata,
+  design_formula = "~ time_point + antibiotic + phage + ab_conc",
+  min_count = 10,
+  use_sva = TRUE,
+  sva_formula = "~ time_point + phage + ab_conc",  # Custom SVA formula
+  blind = TRUE
+)
+
+dds <- deseq_results$dds
+vsd <- deseq_results$vsd
+svobj <- deseq_results$sva
+```
+
+# Data Summary
+
+```{r data-summary}
+# Quick summary
+summarize_deseq2(dds)
+
+# Metadata overview
+cat("\n=== Metadata Variables ===\n")
+str(metadata)
+
+# Sample distribution
+cat("\n=== Sample Distribution ===\n")
+table(metadata$time_point, metadata$phage)
+```
+
+# Quality Control
+
+## PCA Plot
+
+```{r pca-plot, fig.width=10, fig.height=6}
+# PCA with different color schemes
+pcaData <- plotPCA(vsd, intgroup = c("time_point", "phage"), returnData = TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+ggplot(pcaData, aes(x = PC1, y = PC2, color = time_point, shape = phage)) +
+  geom_point(size = 3) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  theme_bw() +
+  theme(legend.position = "right") +
+  ggtitle("PCA - VST Transformed Data")
+```
+
+## Sample Distances
+
+```{r sample-distances, fig.width=10, fig.height=8}
+# Calculate sample distances
+sampleDists <- dist(t(assay(vsd)))
+sampleDistMatrix <- as.matrix(sampleDists)
+
+# Create annotation for heatmap
+annotation_col <- data.frame(
+  TimePoint = metadata$time_point,
+  Phage = metadata$phage,
+  Antibiotic = metadata$antibiotic,
+  row.names = colnames(vsd)
+)
+
+# Plot heatmap
+pheatmap(
+  sampleDistMatrix,
+  clustering_distance_rows = sampleDists,
+  clustering_distance_cols = sampleDists,
+  annotation_col = annotation_col,
+  main = "Sample-to-Sample Distances"
+)
+```
+
+## Dispersion Plot
+
+```{r dispersion-plot, fig.width=8, fig.height=6}
+plotDispEsts(dds, main = "Dispersion Estimates")
+```
+
+# Differential Expression Analysis
+
+## Define Contrasts
+
+```{r define-contrasts}
+# Example: Compare phage treatment vs control at specific time point
+# Adjust according to your experimental design
+
+# View all coefficients
+resultsNames(dds)
+```
+
+## Extract Results
+
+```{r extract-results}
+# Example contrast - modify based on your design
+res <- results(dds, 
+               contrast = c("phage", "treated", "control"),  # Adjust levels
+               alpha = 0.05)
+
+# Summary
+summary(res)
+
+# Order by adjusted p-value
+res_ordered <- res[order(res$padj), ]
+
+# View top genes
+head(res_ordered, 10)
+```
+
+## Volcano Plot
+
+```{r volcano-plot, fig.width=8, fig.height=6}
+# Prepare data for plotting
+res_df <- as.data.frame(res) %>%
+  mutate(
+    gene = rownames(res),
+    significant = padj < 0.05 & abs(log2FoldChange) > 1,
+    direction = case_when(
+      padj < 0.05 & log2FoldChange > 1 ~ "Up",
+      padj < 0.05 & log2FoldChange < -1 ~ "Down",
+      TRUE ~ "NS"
+    )
+  )
+
+# Create volcano plot
+ggplot(res_df, aes(x = log2FoldChange, y = -log10(padj), color = direction)) +
+  geom_point(alpha = 0.6, size = 1.5) +
+  scale_color_manual(values = c("Up" = "red", "Down" = "blue", "NS" = "grey")) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed", alpha = 0.5) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", alpha = 0.5) +
+  theme_bw() +
+  labs(
+    title = "Volcano Plot",
+    x = "Log2 Fold Change",
+    y = "-Log10 Adjusted P-value",
+    color = "Regulation"
+  )
+```
+
+## MA Plot
+
+```{r ma-plot, fig.width=8, fig.height=6}
+plotMA(res, main = "MA Plot", ylim = c(-5, 5))
+```
+
+## Top Differentially Expressed Genes
+
+```{r top-genes}
+# Get significant genes
+sig_genes <- subset(res_ordered, padj < 0.05 & abs(log2FoldChange) > 1)
+
+cat("Number of significant DEGs:", nrow(sig_genes), "\n")
+cat("  - Upregulated:", sum(sig_genes$log2FoldChange > 0), "\n")
+cat("  - Downregulated:", sum(sig_genes$log2FoldChange < 0), "\n")
+
+# Show top 20
+head(as.data.frame(sig_genes), 20)
+```
+
+## Heatmap of Top Genes
+
+```{r top-genes-heatmap, fig.width=10, fig.height=8}
+# Select top 50 genes by adjusted p-value
+top_genes <- head(rownames(res_ordered), 50)
+
+# Get normalized counts
+norm_counts <- get_normalized_counts(dds, method = "vst", vsd = vsd)
+
+# Subset and scale
+mat_scaled <- t(scale(t(norm_counts[top_genes, ])))
+
+# Plot
+pheatmap(
+  mat_scaled,
+  annotation_col = annotation_col,
+  show_rownames = TRUE,
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  main = "Top 50 Differentially Expressed Genes (Z-score)"
+)
+```
+
+# Export Results
+
+```{r export-results}
+# Create results table with annotations
+if (!is.null(annotation)) {
+  # Merge with annotation if available
+  res_export <- as.data.frame(res_ordered) %>%
+    rownames_to_column("gene_id") %>%
+    left_join(annotation, by = c("gene_id" = "Geneid"))  # Adjust join column as needed
+} else {
+  res_export <- as.data.frame(res_ordered) %>%
+    rownames_to_column("gene_id")
+}
+
+# Save results
+write.csv(res_export, 
+          file = "DESeq2_results.csv", 
+          row.names = FALSE)
+
+# Save significant genes only
+sig_res <- res_export %>%
+  filter(padj < 0.05 & abs(log2FoldChange) > 1)
+
+write.csv(sig_res,
+          file = "DESeq2_significant_genes.csv",
+          row.names = FALSE)
+
+cat("Results exported to CSV files\n")
+```
+
+# Session Info
+
+```{r session-info}
+sessionInfo()
+```

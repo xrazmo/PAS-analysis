@@ -1,0 +1,496 @@
+---
+title: "IMC Analysis: Phage-Antibiotic Synergy"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, dpi = 150)
+```
+
+```{r libraries}
+library(tidyverse)
+library(patchwork)
+library(ggrepel)
+library(rstatix)
+library(knitr)
+library(scales)
+
+# ============================================================
+# PARAMETERS
+# ============================================================
+
+imc_file <- "../../time_kill_data//heat.tsv"
+
+# Shared theme (consistent with time-kill figures)
+theme_tk <- theme_bw(base_size = 12) +
+  theme(
+    panel.grid.minor  = element_blank(),
+    strip.background  = element_rect(fill = "#F0F0F0"),
+    legend.position   = "right",
+    plot.title        = element_text(face = "bold", size = 13)
+  )
+
+# Colors per condition group
+imc_colors <- c(
+  "Bacteria"         = "#2C3E50",
+  "Phage alone"      = "#2980B9",
+  "AB 0.5 mg/L"      = "#FAD7A0",
+  "AB 1 mg/L"        = "#F39C12",
+  "AB 2 mg/L"        = "#E67E22",
+  "AB 8 mg/L"        = "#E74C3C",
+  "AB 16 mg/L"       = "#922B21",
+  "Phage + 0.5 mg/L" = "#D7BDE2",
+  "Phage + 1 mg/L"   = "#9B59B6",
+  "Phage + 2 mg/L"   = "#8E44AD",
+  "Media control"    = "#BDC3C7"
+)
+```
+
+## Data Import & Cleaning
+
+```{r data_prep}
+raw_imc <- read.delim(imc_file, stringsAsFactors = FALSE, check.names = FALSE)
+
+# Rename columns for easier handling
+colnames(raw_imc) <- c("well", "annotation", "roi_start", "roi_end",
+                        "total_heat_J", "metabolic_rate_uW",
+                        "max_metabolic_rate_uW", "TTA_h", "TTP_h")
+
+# Parse annotation to clean condition labels
+imc <- raw_imc %>%
+  mutate(
+    # Clean annotation (remove duplicate text from column)
+    annotation = str_trim(str_split_i(annotation, " CTL", 1)),
+    
+    # Map to readable condition
+    condition = case_when(
+      annotation == "CTL BACT"    ~ "Bacteria",
+      annotation == "CTL EC10P1"  ~ "Phage alone",
+      annotation == "CTL MH"      ~ "Media control",
+      annotation == "CTL BACT 0.5"~ "AB 0.5 mg/L",
+      annotation == "CTL BACT 1"  ~ "AB 1 mg/L",
+      annotation == "CTL BACT 2"  ~ "AB 2 mg/L",
+      annotation == "CTL BACT 8"  ~ "AB 8 mg/L",
+      annotation == "CTL BACT 16" ~ "AB 16 mg/L",
+      annotation == "10P1 0.5MG"  ~ "Phage + 0.5 mg/L",
+      annotation == "10P1 1MG"    ~ "Phage + 1 mg/L",
+      annotation == "10P1 2MG"    ~ "Phage + 2 mg/L",
+      TRUE                        ~ annotation
+    ),
+    
+    # Group: AB only, Phage+AB, Controls
+    group = case_when(
+      str_detect(condition, "Phage \\+") ~ "Phage + AB",
+      str_detect(condition, "AB")        ~ "AB only",
+      condition == "Phage alone"         ~ "Phage alone",
+      TRUE                               ~ "Control"
+    ),
+    
+    # Extract AB concentration for matched comparisons
+    ab_conc = case_when(
+      str_detect(condition, "0\\.5") ~ 0.5,
+      str_detect(condition, "1 mg")  ~ 1,
+      str_detect(condition, "2 mg")  ~ 2,
+      str_detect(condition, "8 mg")  ~ 8,
+      str_detect(condition, "16 mg") ~ 16,
+      TRUE                           ~ 0
+    ),
+    
+    # Handle Inf TTA (bacteria never activated)
+    TTA_h_clean   = ifelse(is.infinite(TTA_h), NA, TTA_h),
+    suppressed     = is.infinite(TTA_h),
+    
+    # Factor ordering
+    condition = factor(condition, levels = names(imc_colors))
+  )
+
+# Summary statistics per condition
+imc_summary <- imc %>%
+  group_by(condition, group, ab_conc) %>%
+  summarise(
+    n                  = n(),
+    mean_TTP           = mean(TTP_h,              na.rm = TRUE),
+    sd_TTP             = sd(TTP_h,                na.rm = TRUE),
+    se_TTP             = sd_TTP / sqrt(n),
+    mean_TTA           = mean(TTA_h_clean,         na.rm = TRUE),
+    sd_TTA             = sd(TTA_h_clean,           na.rm = TRUE),
+    mean_total_heat    = mean(total_heat_J,         na.rm = TRUE),
+    sd_total_heat      = sd(total_heat_J,           na.rm = TRUE),
+    se_total_heat      = sd_total_heat / sqrt(n),
+    mean_max_rate      = mean(max_metabolic_rate_uW,na.rm = TRUE),
+    sd_max_rate        = sd(max_metabolic_rate_uW,  na.rm = TRUE),
+    se_max_rate        = sd_max_rate / sqrt(n),
+    pct_suppressed     = mean(suppressed) * 100,
+    .groups = "drop"
+  )
+
+cat("Conditions:\n")
+print(imc_summary %>% select(condition, group, n, pct_suppressed))
+```
+
+---
+
+## Plot A: Time to Peak (TTP) — Primary Metric
+
+> Later peak = more suppression of bacterial metabolic activity.
+> Phage+AB should show significantly delayed TTP vs AB alone or phage alone.
+
+```{r plot_TTP, fig.height=5, fig.width=10}
+# Reference lines
+bact_TTP <- imc_summary %>%
+  filter(condition == "Bacteria") %>%
+  pull(mean_TTP)
+
+phage_TTP <- imc_summary %>%
+  filter(condition == "Phage alone") %>%
+  pull(mean_TTP)
+
+p_TTP <- imc_summary %>%
+  filter(condition != "Media control") %>%
+  ggplot(aes(y = reorder(as.character(condition), mean_TTP),
+             x = mean_TTP, color = condition)) +
+
+  # Reference lines: bacteria and phage alone
+  geom_vline(xintercept = bact_TTP,
+             linetype = "dashed", color = "#2C3E50", alpha = 0.6) +
+  geom_vline(xintercept = phage_TTP,
+             linetype = "dashed", color = "#2980B9", alpha = 0.6) +
+  annotate("text", x = bact_TTP + 0.2, y = 0.6,
+           label = "Bacteria\nalone", size = 2.8,
+           color = "#2C3E50", hjust = 0) +
+  annotate("text", x = phage_TTP + 0.2, y = 0.6,
+           label = "Phage\nalone", size = 2.8,
+           color = "#2980B9", hjust = 0) +
+
+  # Individual points
+  geom_jitter(data = imc %>% filter(condition != "Media control"),
+              aes(y = condition, x = TTP_h, color = condition),
+              width = 0, height = 0.15,
+              size = 2.5, alpha = 0.5, shape = 16,
+              inherit.aes = FALSE) +
+
+  # Mean ± SE
+  geom_errorbar(aes(xmin = mean_TTP - se_TTP,
+                    xmax = mean_TTP + se_TTP),
+                width = 0.25, linewidth = 0.8) +
+  geom_point(aes(fill = condition),
+             shape = 21, size = 4,
+             color = "white", stroke = 0.8) +
+
+  # Group labels on right
+  geom_text(aes(x = 19, label = group),
+            size = 3, hjust = 1, color = "grey40") +
+
+  scale_color_manual(values = imc_colors, guide = "none") +
+  scale_fill_manual(values  = imc_colors, guide = "none") +
+  scale_y_discrete() +   
+  scale_x_continuous(breaks = seq(0, 18, 2), limits = c(0, 20)) +
+  labs(
+    title    = "Time to Peak Metabolic Activity (TTP)",
+    subtitle = "Later peak = greater suppression of bacterial growth",
+    x        = "Time to Peak (hours)",
+    y        = NULL,
+    tag      = "A"
+  ) +
+  theme_tk +
+  theme(plot.tag = element_text(face = "bold", size = 12))
+
+p_TTP
+```
+
+---
+
+## Plot B: Total Heat Production
+
+> Lower total heat = less overall metabolic activity = more bacterial suppression.
+
+```{r plot_heat, fig.height=5, fig.width=10}
+bact_heat <- imc_summary %>%
+  filter(condition == "Bacteria") %>%
+  pull(mean_total_heat)
+
+p_heat <- imc_summary %>%
+  filter(condition != "Media control") %>%
+ ggplot(aes(y = reorder(as.character(condition), -mean_total_heat),
+             x = mean_total_heat, color = condition)) +
+
+  geom_vline(xintercept = bact_heat, linetype = "dashed",
+             color = "#2C3E50", alpha = 0.6) +
+  annotate("text", x = bact_heat + 0.02, y = 0.6,
+           label = "Bacteria\nalone", size = 2.8,
+           color = "#2C3E50", hjust = 0) +
+
+  # Individual points
+  geom_jitter(data = imc %>% filter(condition != "Media control"),
+              aes(y = condition, x = total_heat_J, color = condition),
+              width = 0, height = 0.15,
+              size = 2.5, alpha = 0.5, shape = 16,
+              inherit.aes = FALSE) +
+
+  geom_errorbar(aes(xmin = mean_total_heat - se_total_heat,
+                    xmax = mean_total_heat + se_total_heat),
+                width = 0.25, linewidth = 0.8) +
+  geom_point(aes(fill = condition),
+             shape = 21, size = 4,
+             color = "white", stroke = 0.8) +
+
+  scale_color_manual(values = imc_colors, guide = "none") +
+  scale_fill_manual(values  = imc_colors, guide = "none") +
+  scale_y_discrete()+
+  labs(
+    title    = "Total Heat Production (Q)",
+    subtitle = "Lower Q = less overall bacterial metabolic activity",
+    x        = "Total Heat (J)",
+    y        = NULL,
+    tag      = "B"
+  ) +
+  theme_tk +
+  theme(plot.tag = element_text(face = "bold", size = 12))
+
+p_heat
+```
+
+---
+
+## Plot C: Matched Comparison — Phage+AB vs AB alone
+
+> Direct synergy test at matched concentrations (0.5, 1, 2 mg/L).
+> Both TTP and Total Heat shown side by side.
+
+```{r plot_matched, fig.height=6, fig.width=11}
+# Only matched concentrations (phage+AB exists for 0.5, 1, 2 mg/L)
+matched_df <- imc %>%
+  filter(ab_conc %in% c(0.5, 1, 2),
+         group %in% c("AB only", "Phage + AB")) %>%
+  mutate(ab_label = paste0(ab_conc, " mg/L"))
+
+matched_summary <- imc_summary %>%
+  filter(ab_conc %in% c(0.5, 1, 2),
+         group %in% c("AB only", "Phage + AB")) %>%
+  mutate(ab_label = paste0(ab_conc, " mg/L"))
+
+# TTP matched
+p_match_TTP <- ggplot(matched_summary,
+                      aes(x = ab_label, y = mean_TTP,
+                          color = group, group = group)) +
+  geom_jitter(data = matched_df,
+              aes(x = ab_label, y = TTP_h, color = group),
+              position = position_jitterdodge(jitter.width = 0.1,
+                                              dodge.width  = 0.5),
+              size = 2.5, alpha = 0.5) +
+  geom_line(position = position_dodge(0.5),
+            linewidth = 0.8, linetype = "dashed", alpha = 0.6) +
+  geom_errorbar(aes(ymin = mean_TTP - se_TTP,
+                    ymax = mean_TTP + se_TTP),
+                position = position_dodge(0.5),
+                width = 0.15, linewidth = 0.8) +
+  geom_point(aes(fill = group),
+             position = position_dodge(0.5),
+             shape = 21, size = 4, color = "white", stroke = 0.8) +
+  scale_color_manual(values = c("AB only"    = "#E67E22",
+                                "Phage + AB" = "#8E44AD")) +
+  scale_fill_manual(values  = c("AB only"    = "#E67E22",
+                                "Phage + AB" = "#8E44AD")) +
+  labs(x = "ATM-AVI Concentration",
+       y = "Time to Peak (h)",
+       color = NULL, fill = NULL,
+       tag = "C") +
+  theme_tk +
+  theme(plot.tag       = element_text(face = "bold", size = 12),
+        legend.position = "bottom")
+
+# Total heat matched
+p_match_heat <- ggplot(matched_summary,
+                       aes(x = ab_label, y = mean_total_heat,
+                           color = group, group = group)) +
+  geom_jitter(data = matched_df,
+              aes(x = ab_label, y = total_heat_J, color = group),
+              position = position_jitterdodge(jitter.width = 0.1,
+                                              dodge.width  = 0.5),
+              size = 2.5, alpha = 0.5) +
+  geom_line(position = position_dodge(0.5),
+            linewidth = 0.8, linetype = "dashed", alpha = 0.6) +
+  geom_errorbar(aes(ymin = mean_total_heat - se_total_heat,
+                    ymax = mean_total_heat + se_total_heat),
+                position = position_dodge(0.5),
+                width = 0.15, linewidth = 0.8) +
+  geom_point(aes(fill = group),
+             position = position_dodge(0.5),
+             shape = 21, size = 4, color = "white", stroke = 0.8) +
+  scale_color_manual(values = c("AB only"    = "#E67E22",
+                                "Phage + AB" = "#8E44AD")) +
+  scale_fill_manual(values  = c("AB only"    = "#E67E22",
+                                "Phage + AB" = "#8E44AD")) +
+  labs(x = "ATM-AVI Concentration",
+       y = "Total Heat (J)",
+       color = NULL, fill = NULL,
+       tag = "D") +
+  theme_tk +
+  theme(plot.tag        = element_text(face = "bold", size = 12),
+        legend.position = "bottom")
+
+p_match_TTP | p_match_heat
+```
+
+---
+
+## Plot E: Multi-metric IMC Summary Heatmap
+
+> Overview of all 4 metrics across all conditions — useful for supplementary.
+
+```{r plot_heatmap, fig.height=6, fig.width=10}
+# Scale each metric 0-1 for comparable heatmap
+heatmap_df <- imc_summary %>%
+  filter(condition != "Media control") %>%
+  select(condition, group,
+         `TTP (h)`        = mean_TTP,
+         `Total Heat (J)` = mean_total_heat,
+         `Max Rate (µW)`  = mean_max_rate) %>%
+  pivot_longer(
+    cols      = c(`TTP (h)`, `Total Heat (J)`, `Max Rate (µW)`),  # match exact renamed cols
+    names_to  = "metric",
+    values_to = "value"
+  ) %>%
+  group_by(metric) %>%
+  mutate(
+    scaled = (value - min(value, na.rm = TRUE)) /
+             (max(value, na.rm = TRUE) - min(value, na.rm = TRUE)),
+    metric = factor(metric, levels = c("TTP (h)", "Total Heat (J)", "Max Rate (µW)"))
+  ) %>%
+  ungroup()
+
+
+
+ggplot(heatmap_df,
+       aes(x = metric,
+           y = fct_reorder(condition, value),
+           fill = scaled)) +
+  geom_tile(color = "white", linewidth = 0.6) +
+  geom_text(aes(label = round(value, 1),
+                color = scaled > 0.6),
+            size = 3, fontface = "bold") +
+  facet_grid(group ~ ., scales = "free_y", space = "free") +
+  scale_fill_gradient2(
+    low      = "#2ECC71",
+    mid      = "#F39C12",
+    high     = "#C0392B",
+    midpoint = 0.5,
+    name     = "Scaled\nvalue",
+    #labels   = c("Low", "", "High")
+  ) +
+  scale_color_manual(values = c("TRUE"  = "white",
+                                 "FALSE" = "black"),
+                     guide  = "none") +
+  labs(
+    title    = "IMC Summary — All Metrics",
+    subtitle = "Values scaled 0–1 per metric for comparison | Red = high activity, Green = suppressed",
+    x        = NULL, y = NULL,
+    tag      = "E"
+  ) +
+  theme_tk +
+  theme(
+    plot.tag         = element_text(face = "bold", size = 12),
+    axis.text.x      = element_text(angle = 30, hjust = 1),
+    strip.text.y     = element_text(angle = 0),
+    panel.spacing    = unit(0.3, "cm")
+  )
+```
+
+---
+
+## Statistical Tests
+
+```{r stats_imc}
+# Wilcoxon: Phage+AB vs AB alone at matched concentrations, per metric
+imc_stats <- imc %>%
+  filter(ab_conc %in% c(0.5, 1, 2),
+         group %in% c("AB only", "Phage + AB")) %>%
+  mutate(ab_label = paste0(ab_conc, " mg/L")) %>%
+  pivot_longer(cols = c(TTP_h, total_heat_J, max_metabolic_rate_uW),
+               names_to  = "metric",
+               values_to = "value") %>%
+  filter(!is.na(value)) %>%
+  group_by(metric, ab_label) %>%
+  group_modify(~ {
+    x <- .x %>% filter(group == "Phage + AB") %>% pull(value)
+    y <- .x %>% filter(group == "AB only")    %>% pull(value)
+    if (length(x) < 2 | length(y) < 2) {
+      return(tibble(W = NA, p = NA))
+    }
+    result <- tryCatch(
+      wilcox.test(x, y, exact = FALSE, correct = FALSE),
+      error = function(e) list(statistic = NA, p.value = NA)
+    )
+    tibble(
+      mean_phage_ab = round(mean(x, na.rm = TRUE), 3),
+      mean_ab_only  = round(mean(y, na.rm = TRUE), 3),
+      W             = as.numeric(result$statistic),
+      p             = result$p.value
+    )
+  }) %>%
+  ungroup() %>%
+  adjust_pvalue(method = "BH") %>%
+  add_significance(p.col = "p.adj") %>%
+  mutate(metric = recode(metric,
+    "TTP_h"                  = "Time to Peak (h)",
+    "total_heat_J"           = "Total Heat (J)",
+    "max_metabolic_rate_uW"  = "Max Rate (µW)"
+  ))
+
+imc_stats %>%
+  arrange(metric, ab_label) %>%
+  kable(
+    digits    = 4,
+    col.names = c("Metric", "AB Conc", "Mean (Phage+AB)",
+                  "Mean (AB only)", "W", "p", "p-adj", "Sig."),
+    caption   = "Wilcoxon: Phage+AB vs AB alone per metric and concentration"
+  )
+```
+
+---
+
+## Summary Table
+
+```{r summary_table}
+imc_summary %>%
+  filter(condition != "Media control") %>%
+  mutate(
+    `TTP mean ± SE`        = paste0(round(mean_TTP, 1),        " ± ", round(se_TTP, 1)),
+    `Total Heat mean ± SE` = paste0(round(mean_total_heat, 3), " ± ", round(se_total_heat, 3)),
+    `Max Rate mean ± SE`   = paste0(round(mean_max_rate, 1),   " ± ", round(se_max_rate, 1)),
+    `% Suppressed`         = paste0(round(pct_suppressed), "%")
+  ) %>%
+  select(condition, group, n,
+         `TTP mean ± SE`, `Total Heat mean ± SE`,
+         `Max Rate mean ± SE`, `% Suppressed`) %>%
+  arrange(group, condition) %>%
+  kable(caption = "IMC summary statistics per condition (mean ± SE)")
+```
+
+---
+
+## Key Findings
+
+```{r findings, echo=FALSE, results='asis'}
+bact_TTP_val  <- imc_summary %>% filter(condition == "Bacteria")   %>% pull(mean_TTP)  %>% round(1)
+phage_TTP_val <- imc_summary %>% filter(condition == "Phage alone")%> pull(mean_TTP)  %>% round(1)
+combo_TTP_val <- imc_summary %>% filter(condition == "Phage + 2 mg/L") %>% pull(mean_TTP) %>% round(1)
+
+cat(glue::glue("
+**Time to Peak:**
+- Bacteria alone: **{bact_TTP_val}h** (earliest, fastest growth)
+- Phage alone: **{phage_TTP_val}h** (delayed — phage suppresses then regrows)
+- Phage + 2 mg/L: **{combo_TTP_val}h** (most delayed — sustained suppression)
+
+**Interpretation:**
+- Sub-MIC antibiotic alone does not delay TTP vs bacteria alone
+- Phage alone delays TTP by ~{round(phage_TTP_val - bact_TTP_val, 1)}h
+- Phage + AB delays TTP further — consistent with synergistic suppression
+- AB 8-16 mg/L fully suppresses activity (Inf TTA) — above MIC, expected
+"))
+```

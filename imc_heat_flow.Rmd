@@ -1,0 +1,507 @@
+---
+title: "IMC Heat Flow Curve Analysis"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, dpi = 150)
+```
+
+```{r libraries}
+rm(list=ls())
+library(tidyverse)
+library(patchwork)
+library(knitr)
+
+theme_tk <- theme_bw(base_size = 12) +
+  theme(
+    panel.grid.minor = element_blank(),
+    strip.background = element_rect(fill = "#F0F0F0"),
+    plot.title       = element_text(face = "bold", size = 13)
+  )
+
+# ============================================================
+# USER PARAMETERS
+# ============================================================
+
+heat_file <- "../../time_kill_data/heat_flow_digitized_0.25h_from_heat_png.csv"
+
+# Colors per condition
+curve_colors <- c(
+  "Bacteria"       = "#2C3E50",   # Dark grey
+  "AB 8 mg/L"      = "#922B21",   # Dark red
+  "AB 4 mg/L"      = "#E74C3C",   # Red
+  "AB 2 mg/L"      = "#E67E22",   # Orange
+  "AB 1 mg/L"      = "#F39C12",   # Amber
+  "AB 0.5 mg/L"    = "#FAD7A0",   # Light amber
+  "Phage"    = "#2980B9",   # Blue
+  "Media ctrl"     = "#BDC3C7",   # Grey
+  "Phage + AB 4 mg/L" = "#6C3483",   # Dark purple  ← transcriptomics condition
+  "Phage + AB 2 mg/L" = "#8E44AD",   # Purple
+  "Phage + AB 1 mg/L" = "#BB8FCE",   # Medium purple
+  "Phage + AB 0.5 mg/L"= "#D7BDE2"  # Light purple
+)
+
+# Line types
+curve_lty <- c(
+  "Bacteria"        = "solid",
+  "AB 8 mg/L"       = "dashed",
+  "AB 4 mg/L"       = "dashed",
+  "AB 2 mg/L"       = "dashed",
+  "AB 1 mg/L"       = "dashed",
+  "AB 0.5 mg/L"     = "dashed",
+  "Phage"     = "dotdash",
+  "Media ctrl"      = "dotted",
+  "Phage + AB 4 mg/L"  = "solid",    # Highlight
+  "Phage + AB 2 mg/L"  = "solid",
+  "Phage + AB 1 mg/L"  = "solid",
+  "Phage + AB 0.5 mg/L"= "solid"
+)
+```
+
+## Data Import & Cleaning
+
+```{r data_prep}
+raw <- read.csv(heat_file, stringsAsFactors = FALSE)
+
+heat <- raw %>%
+  mutate(
+    condition = case_when(
+      well == "B1" ~ "Bacteria",
+      well == "B2" ~ "AB 8 mg/L",
+      well == "B3" ~ "AB 4 mg/L",
+      well == "B4" ~ "AB 2 mg/L",
+      well == "B5" ~ "AB 1 mg/L",
+      well == "B6" ~ "AB 0.5 mg/L",
+      well == "C1" ~ "Phage",
+      well == "C2" ~ "Media ctrl",
+      well == "C3" ~ "Phage + AB 4 mg/L",
+      well == "C4" ~ "Phage + AB 2 mg/L",
+      well == "C5" ~ "Phage + AB 1 mg/L",
+      well == "C6" ~ "Phage + AB 0.5 mg/L"
+    ),
+    group = case_when(
+      well %in% c("B2","B3","B4","B5","B6") ~ "AB only",
+      well %in% c("C3","C4","C5","C6")      ~ "Phage + AB",
+      well == "C1"                           ~ "Phage + bacteria",
+      well == "B1"                           ~ "Bacteria",
+      TRUE                                   ~ "Control"
+    ),
+    # Extract AB concentration
+    ab_conc = case_when(
+      str_detect(condition, "0\\.5") ~ 0.5,
+      str_detect(condition, "1 mg")  ~ 1,
+      str_detect(condition, "2 mg")  ~ 2,
+      str_detect(condition, "4 mg")  ~ 4,
+      str_detect(condition, "8 mg")  ~ 8,
+      TRUE                           ~ 0
+    ),
+    condition = factor(condition, levels = names(curve_colors)),
+    # Flag transcriptomics condition
+    is_transcriptomics = well == "C3"
+  )
+
+cat("Wells:", unique(heat$well), "\n")
+cat("Time range:", min(heat$time_h), "–", max(heat$time_h), "h\n")
+cat("Resolution: 0.25h\n")
+cat("Transcriptomics condition present (C3 = Phage + 4mg/L):", 
+    "C3" %in% unique(heat$well), "\n")
+
+write_tsv(heat,'../../time_kill_data/heat_flow_metadata.tsv')
+```
+
+---
+
+## Plot 1: All Curves Overview
+
+> Full reproduction of Figure 2 from the digitized data.
+
+```{r plot_all, fig.height=5, fig.width=11}
+# Find peak of each curve
+peaks <- heat %>%
+  filter(!well %in% c("C2")) %>%   # Exclude media control
+  group_by(condition, well) %>%
+  slice_max(heat_flow_relative, n = 1) %>%
+  ungroup()
+
+p_peaks <- ggplot(heat %>% filter(well != "C2"),
+       aes(x = time_h, y = heat_flow_relative,
+           color = condition, linetype = condition,
+           group = condition)) +
+
+  # # Highlight transcriptomics timepoint
+  annotate("rect", xmin = 3.8, xmax = 4.2,
+           ymin = -Inf, ymax = Inf,
+           fill = "#E74C3C", alpha = 0.08) +
+  # annotate("text", x = 4, y = max(heat$heat_flow_relative) * 1.02,
+  #          label = "4h\n(Transcriptomics)", size = 2.8,
+  #          color = "#E74C3C", fontface = "italic", hjust = 0.5) +
+
+  geom_line(linewidth = 0.9, alpha = 0.9) +
+
+  # Mark peaks
+  geom_point(data = peaks,
+             aes(x = time_h, y = heat_flow_relative),
+             shape = 21, size = 3,
+             fill = "white", stroke = 1) +
+
+  scale_color_manual(values    = curve_colors)    +
+  scale_linetype_manual(values = curve_lty)       +
+  scale_x_continuous(breaks = seq(0, 25, 2))      +
+  scale_y_continuous(breaks = seq(-1, 2, 0.25))   +
+
+  geom_hline(yintercept = 0, linetype = "dashed",
+             color = "grey40", linewidth = 0.5)   +
+
+  labs(
+    #title    = "IMC Relative Heat Flow — All Conditions",
+    #subtitle = "Open circles = peak metabolic activity | Red band = transcriptomics harvest point (4h)",
+    x        = "Time (hours)",
+    y        = "Relative heat flow",
+    color    = "",
+    linetype = ""
+  ) +
+  theme_tk +
+  theme(
+    legend.position  = "top",
+    legend.key.width = unit(1, "cm"),
+    legend.byrow = T,
+    legend.text = element_text(size=10)
+  ) + guides(
+    color = guide_legend(nrow = 2),
+    linetype = guide_legend(nrow = 2)
+  )
+
+p_peaks
+```
+
+---
+
+## Plot 2: Faceted — AB only vs Phage+AB
+
+> Direct comparison at matched concentrations.
+
+```{r plot_facet, fig.height=7, fig.width=11}
+# Only matched concentrations (0.5, 1, 2, 4 mg/L)
+matched_heat <- heat %>%
+  filter(ab_conc %in% c(0.5, 1, 2, 4) | well %in% c("B1","C1")) %>%
+  filter(well != "C2") %>%
+  mutate(
+    ab_label  = ifelse(ab_conc == 0, "Control", paste0(ab_conc, " mg/L")),
+    ab_label  = factor(ab_label,
+                       levels = c("Control", "0.5 mg/L",
+                                  "1 mg/L", "2 mg/L", "4 mg/L"))
+  )
+
+# Reference lines: bacteria and phage alone
+bact_curve  <- heat %>% filter(well == "B1") %>%
+  select(time_h, heat_flow_relative) %>%
+  rename(bact_heat = heat_flow_relative)
+
+phage_curve <- heat %>% filter(well == "C1") %>%
+  select(time_h, heat_flow_relative) %>%
+  rename(phage_heat = heat_flow_relative)
+
+plot_facet_df <- matched_heat %>%
+  filter(!well %in% c("B1", "C1")) %>%
+  left_join(bact_curve,  by = "time_h") %>%
+  left_join(phage_curve, by = "time_h")
+
+# Create dummy rows for the legend
+dummy_legend <- tibble(
+  time_h = 1,
+  heat_flow_relative = 0,
+  group = c("Bacteria", "Phage"),
+  ab_label = c("0.5 mg/L","0.5 mg/L")
+)
+df <- bind_rows(plot_facet_df,dummy_legend)
+df <- df %>% mutate(group=factor(group,levels=c("Bacteria","Phage","AB only","Phage + AB")))
+
+p_mic_curve <- ggplot(df,
+       aes(x = time_h, y = heat_flow_relative,
+           color = group)) +
+
+  # Bacteria reference (grey background line)
+  geom_line(aes(y = bact_heat),
+            color = "#2C3E50", linetype = "twodash",
+            linewidth = 0.5, alpha = 0.7) +
+
+  # Phage alone reference (blue background line)
+  geom_line(aes(y = phage_heat),
+            color = "#2980B9", linetype = "twodash",
+            linewidth = 0.5, alpha = 0.7) +
+
+  # Main curves
+  geom_line(linewidth = 1) +
+
+  # Highlight 4h
+  geom_vline(xintercept = 4, linetype = "dashed",
+             color = "#E74C3C", alpha = 0.5) +
+
+  geom_hline(yintercept = 0, linetype = "dashed",
+             color = "grey40", linewidth = 0.4) +
+
+  facet_wrap(~ab_label, nrow = 1) +
+
+  scale_color_manual(values = c(
+    "Bacteria" = "#2C3E50",
+    "Phage" = "#2980B9",
+    "AB only"    = "#E74C3C",
+    "Phage + AB" = "#8E44AD"
+  )) +
+  scale_linetype_manual(values = c(
+    "Bacteria" = "twodash",
+    "Phage" = "twodash",
+    "AB only"    = "solid",
+    "Phage + AB" = "solid"
+  )) +
+  scale_x_continuous(breaks = seq(0, 25, 4)) +
+  labs(
+    #title    = "IMC Curves: AB Only vs Phage + AB at Matched Concentrations",
+    #subtitle = "Grey = bacteria alone | Blue dotted = phage alone | Red line = 4h transcriptomics point",
+    x        = "Time (hours)",
+    y        = "Relative heat flow",
+    color="",linetype=""
+  ) +
+  theme_tk +
+  theme(
+    legend.position = "bottom",
+    plot.tag        = element_text(face = "bold", size = 12),
+    strip.background = element_blank(),
+    strip.text = element_text(size =9, face= "bold")
+  ) + 
+guides(
+  color = guide_legend(
+    nrow = 1,
+    title.position = "top",
+    override.aes = list(
+      linetype = c("twodash", "twodash", "solid", "solid"),
+      linewidth = 0.95
+    )
+  ),
+  linetype = "none"      # Hide duplicate linetype legend
+)
+p_mic_curve
+```
+
+---
+
+## Plot 3: Highlight Transcriptomics Condition (C3 = Phage + 4 mg/L)
+
+> Focuses on the specific condition used for transcriptomics.
+
+```{r plot_transcriptomics, fig.height=5, fig.width=10}
+# Key curves for this comparison
+key_wells <- c("B1", "B3", "C1", "C3")   # Bacteria, AB 4mg/L, Phage, Phage+4mg/L
+
+key_heat <- heat %>%
+  filter(well %in% key_wells) %>%
+  mutate(
+    label = case_when(
+      well == "B1" ~ "Bacteria alone",
+      well == "B3" ~ "AB 4 mg/L alone",
+      well == "C1" ~ "Phage alone",
+      well == "C3" ~ "Phage + AB 4 mg/L\n(Transcriptomics condition)"
+    ),
+    label = factor(label, levels = c(
+      "Bacteria alone",
+      "AB 4 mg/L alone",
+      "Phage alone",
+      "Phage + AB 4 mg/L\n(Transcriptomics condition)"
+    ))
+  )
+
+# Peak values for annotation
+key_peaks <- key_heat %>%
+  group_by(label, well) %>%
+  slice_max(heat_flow_relative, n = 1) %>%
+  ungroup()
+
+key_colors <- c(
+  "Bacteria alone"                              = "#2C3E50",
+  "AB 4 mg/L alone"                             = "#E74C3C",
+  "Phage alone"                                 = "#2980B9",
+  "Phage + AB 4 mg/L" = "#6C3483"
+)
+
+p_key_peaks <- ggplot(key_heat,
+       aes(x = time_h, y = heat_flow_relative,
+           color = label, linetype = label)) +
+
+  # 4h harvest shading
+  annotate("rect", xmin = 3.8, xmax = 4.2,
+           ymin = -Inf, ymax = Inf,
+           fill = "#E74C3C", alpha = 0.1) +
+  # annotate("text", x = 4.3, y = 0.95,
+  #          label = "4h harvest", size = 3,
+  #          color = "#E74C3C", fontface = "bold", hjust = 0) +
+
+  geom_hline(yintercept = 0, linetype = "dashed",
+             color = "grey40", linewidth = 0.5) +
+  geom_line(linewidth = 1.1) +
+
+  # Peak markers
+  geom_point(data = key_peaks,
+             aes(x = time_h, y = heat_flow_relative),
+             shape = 21, size = 4,
+             fill = "white", stroke = 1.2) +
+  geom_text(data = key_peaks,
+            aes(x = time_h + 0.5,
+                y = heat_flow_relative + 0.04,
+                label = paste0("Peak: ", round(time_h, 1), "h")),
+            size = 3, hjust = 0, show.legend = FALSE) +
+
+  scale_color_manual(values    = key_colors) +
+  scale_linetype_manual(values = c(
+    "Bacteria alone"                              = "solid",
+    "AB 4 mg/L alone"                             = "dashed",
+    "Phage alone"                                 = "dotted",
+    "Phage + AB 4 mg/L" = "solid"
+  )) +
+  scale_x_continuous(breaks = seq(0, 25, 2)) +
+
+  labs(
+   # title    = "IMC: Transcriptomics Condition in Context",
+  #  subtitle = "Phage + 4 mg/L ATM-AVI (C3) vs each component alone",
+    x        = "Time (hours)",
+    y        = "Relative heat flow",
+    color    = NULL, linetype = NULL
+  ) +
+  theme_tk +
+  theme(
+    legend.position  = "top",
+    legend.key.width = unit(1.5, "cm"),
+    legend.text = element_text(size = 9),
+    plot.tag         = element_text(face = "bold", size = 12)
+  )
+```
+
+```{r}
+library(patchwork)
+(p_peaks / p_mic_curve) +  plot_annotation(tag_levels =  "A") &
+  theme(plot.margin = margin(1, 1, 1, 1),
+        axis.title.y.left = element_text(size = 10),
+        legend.margin = margin(t = 2, r = 0, b = 2, l = 0, unit = "pt"),
+        legend.position = 'top',
+        plot.tag = element_text(size=11,face="bold"))
+
+ggsave("./figures/heat_flow.pdf",width=12,height = 10,device = "pdf")
+ggsave("./figures/heat_flow.png",width=12,height = 10,device = "png")
+```
+
+
+---
+
+## Derived Metrics from Curves
+
+```{r derived_metrics}
+# Calculate TTP, peak value, area under curve, and value at 4h per well
+library(DescTools)
+
+derived <- heat %>%
+  filter(well != "C2") %>%
+  group_by(well, condition, group, ab_conc) %>%
+  summarise(
+    TTP_h        = time_h[which.max(heat_flow_relative)],
+    peak_value   = max(heat_flow_relative),
+    value_at_4h  = heat_flow_relative[which.min(abs(time_h - 4))],
+    AUC          = AUC(time_h, heat_flow_relative, method = "trapezoid"),
+    first_zero   = min(time_h[heat_flow_relative <= 0], default = NA),
+    .groups      = "drop"
+  ) %>%
+  arrange(group, ab_conc)
+
+derived %>%
+  mutate(across(where(is.numeric), ~round(., 3))) %>%
+  kable(
+    col.names = c("Well", "Condition", "Group", "AB (mg/L)",
+                  "TTP (h)", "Peak value", "Value at 4h",
+                  "AUC", "First crosses zero (h)"),
+    caption   = "Derived metrics from digitized heat flow curves"
+  )
+```
+
+---
+
+## Plot 4: Derived Metrics Comparison
+
+```{r plot_derived, fig.height=5, fig.width=11}
+# TTP bar
+p_d1 <- derived %>%
+  filter(well != "C2") %>%
+  mutate(condition = fct_reorder(condition, TTP_h)) %>%
+  ggplot(aes(y = condition, x = TTP_h, fill = group)) +
+  geom_col(width = 0.7, alpha = 0.85) +
+  geom_vline(xintercept = derived$TTP_h[derived$well == "B1"],
+             linetype = "dashed", color = "#2C3E50", alpha = 0.7) +
+  scale_fill_manual(values = c(
+    "Bacteria"   = "#2C3E50", "Phage alone" = "#2980B9",
+    "AB only"    = "#E67E22", "Phage + AB"  = "#8E44AD"
+  )) +
+  labs(x = "Time to Peak (h)", y = NULL,
+       fill = NULL, tag = "D") +
+  theme_tk +
+  theme(legend.position = "bottom",
+        plot.tag = element_text(face = "bold", size = 12))
+
+# Heat flow at 4h
+p_d2 <- derived %>%
+  filter(well != "C2") %>%
+  mutate(condition = fct_reorder(condition, -value_at_4h)) %>%
+  ggplot(aes(y = condition, x = value_at_4h, fill = group)) +
+  geom_col(width = 0.7, alpha = 0.85) +
+  geom_vline(xintercept = 0, color = "grey40",
+             linewidth = 0.5, linetype = "dashed") +
+  scale_fill_manual(values = c(
+    "Bacteria"   = "#2C3E50", "Phage alone" = "#2980B9",
+    "AB only"    = "#E67E22", "Phage + AB"  = "#8E44AD"
+  )) +
+  labs(x = "Relative heat flow at 4h", y = NULL,
+       fill = NULL, tag = "E") +
+  theme_tk +
+  theme(legend.position = "bottom",
+        plot.tag = element_text(face = "bold", size = 12))
+
+p_d1 | p_d2
+```
+
+---
+
+## Manuscript Recommendation
+
+```{r recommendation, echo=FALSE, results='asis'}
+ttp_bact   <- derived %>% filter(well == "B1") %>% pull(TTP_h)
+ttp_ab4    <- derived %>% filter(well == "B3") %>% pull(TTP_h)
+ttp_phage  <- derived %>% filter(well == "C1") %>% pull(TTP_h)
+ttp_combo  <- derived %>% filter(well == "C3") %>% pull(TTP_h)
+val_bact_4h  <- derived %>% filter(well == "B1") %>% pull(value_at_4h) %>% round(3)
+val_combo_4h <- derived %>% filter(well == "C3") %>% pull(value_at_4h) %>% round(3)
+
+cat(glue::glue("
+**Key numbers for manuscript:**
+
+- Bacteria alone TTP: {round(ttp_bact,1)}h
+- AB 4 mg/L alone TTP: {round(ttp_ab4,1)}h
+- Phage alone TTP: {round(ttp_phage,1)}h  
+- **Phage + 4 mg/L TTP: {round(ttp_combo,1)}h** (transcriptomics condition)
+- Delay vs bacteria alone: +{round(ttp_combo - ttp_bact, 1)}h
+- Heat flow at 4h, bacteria: {val_bact_4h}
+- Heat flow at 4h, Phage+4mg/L: {val_combo_4h}
+
+**Suggested figure for manuscript:** Plot C (transcriptomics condition in context)
++ Plot B (faceted matched comparison) as a two-panel figure.
+
+**Methods sentence:**
+*Heat flow curves were digitized from representative thermograms and used to 
+derive time to peak metabolic rate (TTP) and relative heat flow at the 
+transcriptomics harvest point (4h). Phage + 4 mg/L ATM-AVI (C3) showed a 
+{round(ttp_combo - ttp_bact, 1)}h delay in peak metabolic activity compared 
+to bacteria alone, with near-zero heat flow at 4h, supporting selection of 
+this timepoint for transcriptomic analysis.*
+"))
+```

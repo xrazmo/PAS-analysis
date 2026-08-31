@@ -1,0 +1,285 @@
+---
+title: "Phage-Bacteria Interaction Heatmap Analysis"
+author: "Your Name"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## Overview
+
+Analysis of phage-bacteria lysis interactions with metadata annotations for antibiotic resistance, clonal typing, and mutation profiling.
+
+## Load Libraries
+
+```{r libraries}
+rm(list=ls())
+library(tidyverse)
+library(ComplexHeatmap)
+library(circlize)
+library(grid)
+library(RColorBrewer)
+```
+
+## Parameters
+
+```{r parameters}
+# Input files
+data_dir <- "../../time_kill_data"
+interaction_file <- file.path(data_dir,"phage_bacteria.tsv")
+metadata_file    <- file.path(data_dir,"summary_isolates.csv")
+outdir           <- "./figures/"
+
+# Visualization
+ref_isolate <- "22ET500456"
+show_col_names  <- TRUE
+cluster_rows    <- F
+cluster_cols    <- F
+mlst_min_count  <- 2
+
+# Colors
+col_no_lysis    <- "#F5F5F5"
+col_dim_lysis   <- "#FFEA6C"
+col_clear_lysis <- "#9FA1FF"
+col_na          <- "#CCCCCC"
+
+# Create output directory
+if (!dir.exists(outdir)) dir.create(outdir, recursive = TRUE)
+```
+
+## Read Data
+
+```{r read_data}
+# Read interaction matrix
+interaction_raw <- read.delim(interaction_file, row.names = 1, check.names = FALSE)
+cat("Phages:", nrow(interaction_raw), "\nIsolates:", ncol(interaction_raw), "\n")
+
+# Read metadata
+metadata_raw <- read.csv(metadata_file, stringsAsFactors = FALSE)
+cat("Metadata records:", nrow(metadata_raw), "\n")
+```
+
+## Quality Control
+
+```{r qc}
+# Unexpected values
+unexpected_vals <- setdiff(unique(as.matrix(interaction_raw)), c(1, 2, 4, NA))
+if (length(unexpected_vals) > 0) {
+  cat("⚠ Unexpected values:", unexpected_vals, "\n")
+}
+
+# Duplicates
+dup_aliases <- metadata_raw$alias[duplicated(metadata_raw$sample)]
+if (length(dup_aliases) > 0) {
+  cat("⚠ Duplicated aliases:", dup_aliases, "\n")
+}
+
+# Missing metadata
+isolate_names <- colnames(interaction_raw)
+missing_metadata <- setdiff(isolate_names, metadata_raw$sample)
+cat("Missing metadata:", length(missing_metadata), "isolates\n")
+print(missing_metadata)
+
+keep_samples <- intersect(isolate_names, metadata_raw$sample)
+
+interaction_raw <- interaction_raw[,keep_samples]
+
+```
+
+## Prepare Data
+
+```{r prepare}
+# Convert to numeric matrix
+hm_matrix <- t(as.matrix(interaction_raw))
+class(hm_matrix) <- "numeric"
+
+# Get lysis profile of reference isolate
+ref_profile <- hm_matrix[ref_isolate, ]
+  
+  # Calculate Euclidean distance of all isolates to reference
+distances <- apply(hm_matrix, 1, function(x) {
+    sqrt(sum((x - ref_profile)^2, na.rm = TRUE))
+  })
+
+# Sort by distance (most similar first)
+sorted_order <- order(distances)
+hm_matrix <- hm_matrix[sorted_order, ]
+# ===== SORT COLUMNS (by lysis of EC45622) =====
+  # Get EC45622's lysis values for each phage
+  ref_lysis <- hm_matrix[ref_isolate, ]
+  
+  # Sort columns: 4 (clear) → 2 (dim) → 1 (no) → NA
+  sorted_cols <- order(ref_lysis, decreasing = TRUE, na.last = TRUE)
+  hm_matrix <- hm_matrix[, sorted_cols]
+  
+# Match metadata to heatmap columns
+metadata <- metadata_raw %>%
+  filter(sample %in% rownames(hm_matrix)) %>%
+  select(sample,alias, mlst_st, MIC_ATM_AVI, BLAST_NDM, BLAST_CMY,POINT_PBP3)
+
+metadata_ordered <- metadata %>%
+  slice(match(rownames(hm_matrix), sample))
+
+# Process annotations
+mlst_st_collapsed <-metadata_ordered$mlst_st
+st_counts <- table(mlst_st_collapsed)
+rare_sts <- names(st_counts[st_counts < mlst_min_count])
+mlst_st_collapsed[mlst_st_collapsed %in% rare_sts] <- "Other"
+
+st_levels <- c(
+  sort(as.numeric(setdiff(unique(mlst_st_collapsed), "Other"))),
+  "Other"
+)
+st_levels <- as.character(st_levels)
+
+mlst_st_collapsed <- factor(mlst_st_collapsed,levels=st_levels)
+
+# Convert MIC to numeric first
+mic_numeric <- suppressWarnings(as.numeric(gsub("[<>]", "", metadata_ordered$MIC_ATM_AVI)))
+
+# Categorize into MIC categories
+mic_category <- sapply(mic_numeric, function(x) {
+  if (is.na(x)) return("NA")
+  else if (x <= 4) return("4")
+  else if (x <= 8) return("8")
+  else if (x <= 16) return("16")
+  else if (x <= 32) return("32")
+  else return("32+")
+}, USE.NAMES = FALSE)
+
+mic_category <- factor(mic_category, levels = c("4", "8", "16", "32", "32+", "NA"))
+cat("  MIC distribution:\n")
+print(table(mic_category))
+
+
+ndm_standardized <- ifelse(metadata_ordered$BLAST_NDM == "", "Absent", "Present")
+cmy_standardized <- ifelse(metadata_ordered$BLAST_CMY == "", "Absent", "Present")
+
+
+cat("Processing complete. Ready to visualize.\n")
+```
+
+## Create Colors & Annotations
+
+```{r colors_annotations}
+# Color schemes
+# Get sorted ST levels from factor
+st_levels_sorted <- levels(mlst_st_collapsed)
+st_colors <- setNames(
+  colorRampPalette(brewer.pal(8, "Set2"))(length(st_levels_sorted)), 
+  st_levels_sorted
+)
+
+mic_colors <- c(
+  "4" = "#FDB462",      # Orange
+  "8" = "#D51C39",      # Red
+  "16" = "#760031",     # Darker red
+  "32" = "#4A0080"    # Dark purple
+)
+ndm_colors <- c("Present" = "#6FCF97", "Absent" = "#F5F5F5")
+cmy_colors <- c("Present" = "#4BB8FA", "Absent" = "#F5F5F5")
+
+
+# Row annotations
+row_anno <- HeatmapAnnotation(
+ 
+  MIC_ATM_AVI =mic_category,
+  BLAST_NDM = ndm_standardized,
+  BLAST_CMY = cmy_standardized,
+  MLST_ST = mlst_st_collapsed,
+  col = list(MLST_ST = st_colors,  MIC_ATM_AVI = mic_colors,
+             BLAST_NDM = ndm_colors,BLAST_CMY=cmy_colors),
+  annotation_label = c( "MIC (mg/L)", "blaNDM","blaCMY","ST"),
+  annotation_name_gp= gpar(fontsize = 8,fontface="bold"),
+  show_legend = c(F, F, F,F),
+  which = "row",
+  gp = gpar(col = "#BFC6C4", lwd = 0.6))
+```
+
+## Generate Heatmap
+
+```{r heatmap}
+# Color function for main heatmap
+lysis_col_func <- function(x) {
+  ifelse(is.na(x), col_na,
+         ifelse(x == 1, col_no_lysis,
+                ifelse(x == 2, col_dim_lysis,
+                       ifelse(x == 4, col_clear_lysis, col_na))))
+}
+
+# Create heatmap
+hm <- Heatmap(
+  hm_matrix,
+  col = lysis_col_func,
+  cluster_rows = F,
+  cluster_columns = F,
+  # Row (sample/isolate) settings - use alias names
+  row_names_side = "left",
+  row_names_gp = gpar(fontsize = 8),
+  row_labels = metadata_ordered$alias,  # Use alias as row names
+  
+    # Column (phage) settings
+  show_column_names = show_col_names,
+  column_names_gp = gpar(fontsize = 8),
+  column_names_rot = 90,  
+  column_names_centered = TRUE,
+  
+  right_annotation = row_anno,
+  
+  rect_gp = gpar(col = "#BFC6C4", lwd = 0.5),
+  border = TRUE,
+  width = unit(ncol(hm_matrix) * 0.5, "cm"),   # Phages are columns now
+  height = unit(nrow(hm_matrix) * 0.4, "cm"),  # Samples are rows now
+  show_heatmap_legend = FALSE,
+  heatmap_legend_param = list(legend_gp = gpar(fontsize = 7,fontface="bold"))
+)
+
+# Legend
+legend_list <- packLegend(
+  Legend(labels = c("No lysis", "Dim lysis", "Clear lysis"), 
+         legend_gp = gpar(fill = c(col_no_lysis, col_dim_lysis, col_clear_lysis)),
+         title = "Lysis Profile",title_gp = gpar(fontsize = 8,fontface="bold"), labels_gp =gpar(fontsize = 8)),
+         
+   Legend(labels = names(mic_colors), legend_gp = gpar(fill = mic_colors), title = "MIC(mg/L)",
+          title_gp = gpar(fontsize = 8,fontface="bold"),labels_gp =gpar(fontsize = 8)),
+   
+  Legend(labels = names(ndm_colors), legend_gp = gpar(fill = ndm_colors), title = "blaNDM",
+          title_gp = gpar(fontsize = 8,fontface="bold"),labels_gp =gpar(fontsize = 8)),
+  
+  Legend(labels = names(cmy_colors), legend_gp = gpar(fill = cmy_colors), title = "blaCMY",
+          title_gp = gpar(fontsize = 8,fontface="bold"),labels_gp =gpar(fontsize = 8)),
+  
+  Legend(labels = names(st_colors), legend_gp = gpar(fill = st_colors), title = "ST", ncol = 1,
+          title_gp = gpar(fontsize = 8,fontface="bold"),labels_gp =gpar(fontsize = 8)),
+  gap = unit(0.5, "cm")
+)
+```
+
+## Display Heatmap
+
+```{r display}
+
+draw(hm, annotation_legend_list = legend_list, heatmap_legend_side = "right")
+
+```
+
+## Save Outputs
+
+```{r save}
+# PDF
+pdf(file.path(outdir, "phage_bacteria_heatmap.pdf"), width = 8, height = 7)
+draw(hm, annotation_legend_list = legend_list)
+dev.off()
+cat("✓ Saved:", file.path(outdir, "phage_bacteria_heatmap.pdf"), "\n")
+
+
+```
+

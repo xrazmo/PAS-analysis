@@ -1,0 +1,7 @@
+output/
+archive/
+export/
+figures/
+.idea/
+.DS_Store
+*.BAK

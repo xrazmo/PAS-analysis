@@ -1,0 +1,749 @@
+---
+title: "Time-Kill Curve Analysis: Phage-Antibiotic Synergy"
+author: "Your Name"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    code_folding: hide
+    fig_width: 10
+    fig_height: 6
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, dpi = 150)
+```
+
+## Libraries & Parameters
+
+```{r libraries}
+rm(list=ls())
+library(tidyverse)
+library(ggplot2)
+library(scales)
+library(ggrepel)
+library(patchwork)
+library(rstatix)
+library(ggpubr)
+# ============================================================
+# USER PARAMETERS
+# ============================================================
+data_dir <- "../../time_kill_data/"
+# Input file
+input_file <- file.path(data_dir,"time_kill.csv")
+
+# Initial inoculum at t=0 (CFU/mL)
+initial_inoculum <- 1e6
+
+# Detection limit (for values of 0, replace with this)
+detection_limit <- 100
+
+# Log10 killing threshold for "synergy" or "bactericidal"
+bactericidal_threshold <- 4  # ≥3 log10 reduction = bactericidal
+
+# Colors per condition group
+# color_palette <- c(
+#   "BC-CTR"       = "#2C3E50",   # Dark grey - bacteria control
+#   "BC-8mg/L"     = "#E74C3C",   # Red       - antibiotic 8 mg/L
+#   "BC-4mg/L"     = "#E67E22",   # Orange    - antibiotic 4 mg/L
+#   "BC-2mg/L"     = "#F39C12",   # Yellow    - antibiotic 2 mg/L
+#   "BC-1mg/L"     = "#F1C40F",   # Light yellow
+#   "BC-0.5mg/L"   = "#FAD7A0",   # Very light
+#   "PH-CTRL"      = "#2980B9",   # Blue      - phage alone
+#   "PHBC-4mg/L"   = "#8E44AD",   # Purple    - phage + 4 mg/L
+#   "PHBC-2mg/L"   = "#9B59B6",   # Medium purple
+#   "PHBC-1mg/L"   = "#BB8FCE",   # Light purple
+#   "PHBC-0.5mg/L" = "#D7BDE2"    # Very light purple
+# )
+
+# color_palette <- c(
+#   "BC-CTR"       = "#2C3E50",   # Dark grey - bacteria control
+#   "BC-8mg/L"     = "#E74C3C",   # Red       - antibiotic 8 mg/L
+#   "BC-4mg/L"     = "#E67E22",   # Orange    - antibiotic 4 mg/L
+#   "BC-2mg/L"     = "#F39C12",   # Yellow    - antibiotic 2 mg/L
+#   "BC-1mg/L"     = "#F1C40F",   # Light yellow
+#   "BC-0.5mg/L"   = "#FAD7A0",   # Very light
+#   "PH-CTRL"      = "#2980B9",   # Blue      - phage alone
+#   "PHBC-4mg/L"   = "#8E44AD",   # Purple    - phage + 4 mg/L
+#   "PHBC-2mg/L"   = "#9B59B6",   # Medium purple
+#   "PHBC-1mg/L"   = "#BB8FCE",   # Light purple
+#   "PHBC-0.5mg/L" = "#D7BDE2"    # Very light purple
+# )
+color_palette <- c(
+  "BC-CTR"       = "#2C3E50",   
+  "BC-8mg/L"     = "#E74C3C",  
+  "BC-4mg/L"     = "#8A5F41",  
+  "BC-2mg/L"     = "#F39C12",  
+  "BC-1mg/L"     = "#9FA1FF",   
+  "BC-0.5mg/L"   = "#6FCF97",   
+  "PH-CTRL"      = "#2C3E50",   
+  "PHBC-4mg/L"   = "#8A5F41",   
+  "PHBC-2mg/L"   = "#F39C12",  
+  "PHBC-1mg/L"   = "#9FA1FF",   
+  "PHBC-0.5mg/L" = "#6FCF97"  
+)
+
+shape_colors <- c(   
+  "BC-8mg/L"     = "#E74C3C",  
+  "BC-4mg/L"     = "#8A5F41",  
+  "BC-2mg/L"     = "#F39C12",  
+  "BC-1mg/L"     = "#9FA1FF",   
+  "BC-0.5mg/L"   = "#6FCF97",
+  "BC-CTR"       = "#2C3E50") 
+
+# Shared theme
+theme_tk <- theme_bw(base_size = 12) +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.margin = margin(r=20,l=10),
+        plot.caption = element_text(hjust = 0,size=12),
+              axis.text.x=element_text(size=12,hjust=0.5,vjust = 0.5),
+              axis.text.y=element_text(size=12),
+              axis.title.y = element_text(size=14),
+              axis.title.x = element_text(size=13),
+              strip.background = element_blank(), strip.placement = "outside",strip.text=element_text(size=12),
+              panel.grid.major.x = element_line(linewidth =0.3,linetype = "solid"),
+              panel.grid.major.y = element_line(linetype = "dashed", colour = "gray80"),
+              panel.grid.minor.y = element_line(linetype = "dotted", colour = "gray80"))
+
+```
+
+## Data Import & Preprocessing
+
+```{r data_prep}
+# Read data
+raw <- read.csv(input_file, stringsAsFactors = FALSE, check.names = FALSE)
+
+# Add t=0 (initial inoculum for each row)
+raw <- raw %>% mutate(`0h` = initial_inoculum)
+
+# Convert to long format
+long <- raw %>%
+  pivot_longer(
+    cols = matches("^[0-9]+h$"),
+    names_to = "timepoint",
+    values_to = "cfu"
+  ) %>%
+  mutate(
+    time = as.numeric(str_remove(timepoint, "h")),
+    # Replace 0 and NA with detection limit
+    cfu = ifelse( cfu == 0, detection_limit, cfu),
+    log_cfu = log10(cfu),
+    # Group variables
+    phage = factor(phage, levels = c(0, 1), labels = c("No Phage", "Phage")),
+    antibiotic = factor(antibiotic)
+  )
+
+# Summarise: mean ± SD per condition
+summary_df <- long %>%
+  group_by(name, phage, antibiotic, time) %>%
+  summarise(
+    mean_log = mean(log_cfu),
+    sd_log   = sd(log_cfu),
+    se_log   = sd_log / sqrt(n()),
+    n        = n(),
+    .groups  = "drop"
+  ) %>%
+  # Log10 reduction from initial inoculum
+  mutate(log_reduction = log10(initial_inoculum) - mean_log)
+
+# Log reduction at 24h only
+final_df <- summary_df %>%
+  filter(time == 24) %>%
+  arrange(log_reduction)
+
+cat("Conditions:", unique(summary_df$name), "\n")
+cat("Time points:", sort(unique(summary_df$time)), "\n")
+cat("Replicates per group: 3\n")
+```
+---
+
+## Plot 2: Time-Kill Curves (Faceted: Phage vs No Phage)
+
+> Compares antibiotic-only vs phage+antibiotic conditions side by side.
+
+```{r plot2_facet, fig.height=6, fig.width=12}
+
+  
+ library(patchwork)
+
+# ============================================================
+# FUNCTION: draw one panel by phage group
+# ============================================================
+
+plot_timekill <- function(data, 
+                          phage_group,    # "No Phage" or "Phage"
+                          panel_label,    # e.g. "(A) Antibiotic Only"
+                          show_legend  = FALSE,
+                          show_x_title = FALSE) {
+  
+  df <- data %>% filter(phage == phage_group)
+  
+  p <- ggplot(df, aes(x = time, y = mean_log,
+                      color = name, fill = name,
+                      group = name, shape = antibiotic)) +
+    
+    geom_ribbon(aes(ymin = mean_log - sd_log,
+                    ymax = mean_log + sd_log),
+                alpha = 0.15, color = NA) +
+    geom_line(linewidth = 0.3) +
+    geom_point(size = 2.5, alpha = 0.6) +
+    
+    geom_hline(yintercept = log10(detection_limit),
+               linetype = "dotted", color = "red") +
+    annotate("text", x = 0.05, y = log10(detection_limit) + 0.15,
+             label = "Detection limit", size = 3,
+             color = "red", hjust = 0) +
+    
+    scale_color_manual(values = color_palette) +
+    scale_fill_manual(values  = color_palette) +
+    scale_shape_manual(values = c(21, 22, 23, 24, 25, 7)) +
+    scale_x_continuous(breaks = c(0, 2, 4, 6, 10, 24)) +
+    scale_y_continuous(
+      labels = label_math(10^.x),
+      limits = c(0, 10)
+    ) +
+    labs(
+      tag   = panel_label,
+      x     = if (show_x_title) "Time (hours)" else NULL,
+      y     = "CFU/mL (log₁₀)"
+    ) +
+    theme_tk +
+    theme(
+      plot.tag       = element_text(size = 9, face = "bold", hjust = 0),
+      plot.tag.position = "topleft",
+      legend.position   = if (show_legend) "top" else "none",
+      legend.box        = "horizontal",
+      axis.title.x      = if (show_x_title) element_text() else element_blank(),
+      axis.text.x       = if (show_x_title) element_text() else element_blank(),
+      axis.ticks.x      = if (show_x_title) element_line() else element_blank()
+    ) +
+    guides(
+      color = "none",
+      fill  = "none",
+      shape = guide_legend(
+        override.aes = list(fill  = rev(shape_colors),
+                            color = rev(shape_colors)),
+        title = "ATM-AVI (mg/L)",
+        nrow  = 1
+      )
+    )
+  
+  return(p)
+}
+
+# ============================================================
+# DRAW BOTH PANELS
+# ============================================================
+dummy_row <- summary_df %>%
+  filter(name == "BC-8mg/L") %>%        # Copy structure from existing 8mg/L rows
+  mutate(
+    name       = "PHBC-8mg/L",          # New dummy condition name
+    phage      = "Phage",               # Assign to phage group
+    antibiotic = factor(8),
+    mean_log   = NA,                    # All NA — nothing will be plotted
+    sd_log     = NA,
+    se_log     = NA,
+    log_reduction = NA
+  )
+
+summary_df_balanced <- bind_rows(summary_df, dummy_row)
+
+p_ab    <- plot_timekill(summary_df_balanced,
+                         phage_group   = "No Phage",
+                         panel_label   = "",
+                         show_legend   = T,
+                         show_x_title  = T)
+
+p_phage <- plot_timekill(summary_df_balanced,
+                         phage_group   = "Phage",
+                         panel_label   = "",
+                         show_legend   = T,   # Legend on bottom panel
+                         show_x_title  = T)
+
+# ============================================================
+# COMBINE WITH PATCHWORK
+# ============================================================
+
+p_combined <- p_ab / p_phage +
+  plot_layout(heights = c(1, 1)) &
+  theme(plot.margin = margin(5, 10, 5, 10))
+
+p_combined
+
+ggsave("./figures/time_kill.pdf",width=10,height=7,device="pdf")
+```
+
+---
+```{r}
+# ============================================================
+# TIME TO THRESHOLD METRICS
+# ============================================================
+
+thresholds <- c(1, 2, 3)   # log10 reductions to detect
+
+time_to_kill <- long %>%
+  filter(!is.na(log_cfu)) %>%
+  group_by(name, phage, antibiotic, sample_id) %>%
+  arrange(time) %>%
+  mutate(
+    log_reduction_rep = log10(initial_inoculum) - log_cfu
+  ) %>%
+  
+  # For each threshold, find first timepoint where it is crossed
+  summarise(
+    time_1log = min(time[log_reduction_rep >= 1], default = Inf),
+    time_2log = min(time[log_reduction_rep >= 2], default = Inf),
+    time_3log = min(time[log_reduction_rep >= 3], default = Inf),
+    max_kill  = max(log_reduction_rep, na.rm = TRUE),
+    time_max  = time[which.max(log_reduction_rep)],
+    .groups = "drop"
+  ) %>%
+  group_by(name, phage, antibiotic) %>%
+  summarise(
+    mean_time_1log = mean(time_1log[is.finite(time_1log)], na.rm = TRUE),
+    mean_time_2log = mean(time_2log[is.finite(time_2log)], na.rm = TRUE),
+    mean_time_3log = mean(time_3log[is.finite(time_3log)], na.rm = TRUE),
+    pct_reach_1log = mean(is.finite(time_1log)) * 100,
+    pct_reach_2log = mean(is.finite(time_2log)) * 100,
+    pct_reach_3log = mean(is.finite(time_3log)) * 100,
+    mean_max_kill  = mean(max_kill, na.rm = TRUE),
+    mean_time_max  = mean(time_max, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    across(starts_with("mean_time"), 
+           ~ifelse(is.nan(.) | is.infinite(.), NA, .)),
+    across(starts_with("mean_time"),
+           ~ifelse(is.na(.), ">24h", paste0(., "h")))
+  )
+
+time_to_kill %>%
+  select(name, mean_time_1log, mean_time_2log, mean_time_3log,
+         pct_reach_3log, mean_max_kill, mean_time_max) %>%
+  arrange(mean_time_max) %>%
+  kable(
+    digits = 1,
+    col.names = c("Condition",
+                  "Time to 1-log kill",
+                  "Time to 2-log kill",
+                  "Time to 3-log kill",
+                  "% reaching 3-log",
+                  "Max log reduction",
+                  "Time of max kill (h)"),
+    caption = "Pharmacodynamic kill metrics per condition"
+  )
+
+```
+
+```{r}
+
+bubble_df <- long %>%
+  filter(antibiotic %in% c(0,0.5, 1, 2, 4)) %>%
+  filter(!is.na(log_cfu), time > 0) %>%
+  mutate(log_reduction = log10(initial_inoculum) - log_cfu) %>%
+  group_by(name, phage, time, antibiotic) %>%
+  summarise(
+    mean_reduction = mean(log_reduction, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    group_type = ifelse(phage == "Phage", "Phage + AB", "AB Only")
+  )
+
+plot_bubble <- function(data,
+                        group,           # "AB Only" or "Phage + AB"
+                        panel_label,     # "(A) ..." or "(B) ..."
+                        show_legend  = FALSE,
+                        show_x_title = FALSE) {
+
+  df <- data %>% filter(group_type == group)
+
+  ggplot(df, aes(x = time, y = factor(antibiotic))) +
+    geom_point(aes(size = abs(mean_reduction),
+                   fill = mean_reduction),
+               shape = 21, color = "white", stroke = 0.5) +
+    geom_text(aes(label = round(mean_reduction, 1)),
+              size = 2.5, color = "black", fontface = "bold") +
+    scale_fill_gradient2(
+      low      = "#00FF9C",
+      mid      = "#F39C12",
+      high     = "#F93827",
+      midpoint = 0,
+      limits   = range(data$mean_reduction, na.rm = TRUE),  # Shared scale
+      name     = "log10 reduction"
+    ) +
+    scale_size_continuous(range = c(3, 14), guide = "none") +
+    scale_x_continuous(breaks = c(2, 4, 6, 10, 24)) +
+    labs(
+      tag = panel_label,
+      x   = if (show_x_title) "Time (hours)" else NULL,
+      y   = "ATM-AVI (mg/L)"
+    ) +
+    theme_tk +
+    theme(
+      plot.tag          = element_text(size = 9, face = "bold"),
+      plot.tag.position = "topleft",
+      legend.position   = if (show_legend) "top" else "none",
+      legend.box = "horizontal",
+      axis.title.x      = if (show_x_title) element_text() else element_blank(),
+      axis.text.x       = if (show_x_title) element_text() else element_blank(),
+      axis.ticks.x      = if (show_x_title) element_line()  else element_blank()
+    )
+}
+
+p_bubble_ab    <- plot_bubble(bubble_df,
+                              group        = "AB Only",
+                              panel_label  = "",
+                              show_legend  = T,
+                              show_x_title = FALSE)
+
+p_bubble_phage <- plot_bubble(bubble_df,
+                              group        = "Phage + AB",
+                              panel_label  = "",
+                              show_legend  = F,
+                              show_x_title = TRUE)
+
+p_bubble_combined <- p_bubble_ab / p_bubble_phage +
+  plot_layout(heights = c(1, 1), guides = "collect") &
+  theme(plot.margin = margin(5, 10, 5, 10),  legend.position = "top")
+
+p_bubble_combined
+
+```
+
+```{r}
+# Δlog10 per timepoint × concentration
+synergy_bubble_df <- long %>%
+  filter(antibiotic %in% c(0, 0.5, 1, 2, 4),
+         !is.na(log_cfu), time > 0) %>%
+  mutate(
+    log_reduction = log10(initial_inoculum) - log_cfu,
+    group_type    = ifelse(phage == "Phage", "Phage + AB", "AB Only")
+  ) %>%
+  group_by(time, antibiotic, group_type) %>%
+  summarise(mean_red = mean(log_reduction, na.rm = TRUE),
+            .groups  = "drop") %>%
+  pivot_wider(names_from  = group_type,
+              values_from = mean_red) %>%
+  mutate(
+    delta      = `Phage + AB` - `AB Only`,   # Synergy only
+    sig_border = case_when(                   # From your Dunn results
+      time %in% c(4, 6) ~ "Peak",
+      TRUE               ~ "Other"
+    )
+  )
+
+p_synergy_bubble <- ggplot(
+  synergy_bubble_df,
+  aes(x = factor(time), y = factor(antibiotic))
+) +
+  # Significance border on peak timepoints
+  annotate("rect",
+           xmin = 1.5, xmax = 3.4,
+           ymin = 0.5, ymax = 5.4,
+           fill = "#8E44AD", alpha = 0.06,
+           color = "#8E44AD", linetype = "dashed") +
+  annotate("text", x = 2.5, y = 5.5,
+           label = "Peak synergy (4h ≈ 6h, Dunn p < 0.001)",
+           size = 3, color = "black", fontface = "bold") +
+
+  geom_point(aes(size = abs(delta), fill = delta),
+             shape = 21, color = "white", stroke = 0.6) +
+  geom_text(aes(label = round(delta, 1),
+                color = abs(delta) > 1.5),
+            size = 2.8, fontface = "bold") +
+
+
+  scale_fill_gradient2(
+    low      = "#3498DB",    # Blue = phage worse (antagonism)
+    mid      = "#ECF0F1",    # White = no synergy
+    high     = "#E74C3C",    # Red = strong synergy
+    midpoint = 0,
+    name     = "Δlog₁₀\n(synergy)",
+    limits   = c(-3, 6)
+  ) +
+  scale_color_manual(values = c("TRUE"  = "white",
+                                 "FALSE" = "black"),
+                     guide  = "none") +
+  scale_size_continuous(range = c(3, 14), guide = "none") +
+  scale_x_discrete(labels = paste0(c(2, 4, 6, 10, 24), "h")) +
+  scale_y_discrete(labels = c("0" = "Phage\nonly",
+                               "0.5" = "0.5",
+                               "1" = "1",
+                               "2" = "2",
+                               "4" = "4")) +
+  labs(
+    x = "",
+    y = "ATM-AVI (mg/L)",
+  ) +
+  theme_tk +
+  theme(plot.tag = element_text(face = "bold", size = 12),
+        plot.margins = c(5,5,5,5),
+        legend.position=c(0.96,0.6),
+        legend.background = element_blank())
+
+p_synergy_bubble 
+```
+
+
+
+---
+```{r stats_setup}
+library(rstatix)
+library(ggpubr)
+library(knitr)
+
+timepoint_df <- long %>%
+  filter(antibiotic %in% c(0.5, 1, 2, 4),
+         !is.na(log_cfu),
+         time > 0) %>%
+  mutate(
+    group_type    = ifelse(phage == "Phage", "Phage + AB", "AB Only"),
+    log_reduction = log10(initial_inoculum) - log_cfu
+  )
+```
+
+### Test 1: Wilcoxon Test at Each Timepoint per Concentration
+
+> Tests whether phage+AB reduces CFU significantly vs AB alone at each hour.
+
+```{r stats_wilcoxon}
+wilcox_by_time <- timepoint_df %>%
+  group_by(time) %>%
+  group_modify(~ {
+    x <- .x %>% filter(group_type == "Phage + AB") %>% pull(log_reduction)
+    y <- .x %>% filter(group_type == "AB Only")    %>% pull(log_reduction)
+
+    result <- tryCatch(
+      wilcox.test(x, y, exact = FALSE, correct = FALSE),
+      warning = function(w) wilcox.test(x, y, exact = FALSE, correct = FALSE),
+      error   = function(e) list(statistic = NA, p.value = NA)
+    )
+
+    tibble(
+      n_phage_ab            = length(x),
+      n_ab_only             = length(y),
+      mean_reduction_phageAB = round(mean(x, na.rm = TRUE), 2),
+      mean_reduction_ABonly  = round(mean(y, na.rm = TRUE), 2),
+      delta_log              = round(mean(x, na.rm = TRUE) -
+                                     mean(y, na.rm = TRUE), 2),
+      W                      = as.numeric(result$statistic),
+      p                      = result$p.value
+    )
+  }) %>%
+  ungroup() %>%
+  adjust_pvalue(method = "BH") %>%
+  add_significance(p.col = "p.adj") %>%
+  mutate(
+    time_label     = paste0(time, "h"),
+    interpretation = case_when(
+      delta_log >= 2  ~ "Strong synergy",
+      delta_log >= 1  ~ "Moderate synergy",
+      delta_log >= 0  ~ "Mild synergy",
+      TRUE            ~ "Antagonism"
+    )
+  ) %>%
+  select(time_label, n_phage_ab, n_ab_only,
+         mean_reduction_phageAB, mean_reduction_ABonly,
+         delta_log, W, p, p.adj, p.adj.signif, interpretation)
+
+wilcox_by_time %>%
+  kable(
+    digits = 3,
+    col.names = c("Time", "n (Phage+AB)", "n (AB Only)",
+                  "Mean log-red (Phage+AB)", "Mean log-red (AB Only)",
+                  "Δlog₁₀", "W", "p-value", "p-adj (BH)", "Sig.",
+                  "Interpretation"),
+    caption = "Phage+AB vs AB alone at each timepoint (pooled across concentrations)"
+  )
+
+write_tsv(wilcox_by_time,"./export/wilcox_by_time_pooled_concentrations.tsv")
+```
+
+---
+
+### Test 2: Effect Size (Cohen's d)
+
+> Quantifies HOW MUCH phage reduces CFU, not just whether the difference is significant.
+
+```{r stats_effectsize}
+# ============================================================
+# TEST 2: Kruskal-Wallis — does synergy differ across timepoints?
+# ============================================================
+
+# Calculate delta per matched pair (same antibiotic + replicate number)
+delta_by_time <- timepoint_df %>%
+  # Extract replicate number from sample_id
+  mutate(rep = str_extract(sample_id, "_[0-9]+$") %>% str_remove("_")) %>%
+  group_by(time, antibiotic, rep, group_type) %>%
+  summarise(mean_red = mean(log_reduction, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(names_from = group_type, values_from = mean_red) %>%
+  mutate(delta = `Phage + AB` - `AB Only`) %>%
+  filter(!is.na(delta))
+
+delta_by_time <- delta_by_time %>%
+  mutate(time_f = factor(time))
+
+# Check before running Kruskal
+cat("Rows in delta_by_time:", nrow(delta_by_time), "\n")
+cat("Timepoints present:", unique(delta_by_time$time), "\n")
+cat("Groups per timepoint:\n")
+print(table(delta_by_time$time))
+
+# Only run if more than one timepoint has data
+if (n_distinct(delta_by_time$time) > 1 &
+    nrow(delta_by_time) > n_distinct(delta_by_time$time)) {
+
+  kw_time <- kruskal_test(delta_by_time, delta ~ time_f)
+  cat("Kruskal-Wallis: H =", round(kw_time$statistic, 3),
+      "| df =", kw_time$df,
+      "| p =",  round(kw_time$p, 4), "\n")
+
+  dunn_time <- dunn_test(delta_by_time, delta ~ time_f,
+                         p.adjust.method = "BH") %>%
+    add_significance() %>%
+    select(group1, group2, statistic, p, p.adj, p.adj.signif) %>%
+    arrange(p.adj)
+
+  dunn_time %>%
+    kable(
+      digits    = 3,
+      col.names = c("Time 1", "Time 2", "Z", "p", "p-adj", "Sig."),
+      caption   = "Dunn post-hoc: which timepoints differ in synergy magnitude?"
+    )
+
+} else {
+  cat("⚠ Not enough matched pairs for Kruskal-Wallis.\n")
+  cat("  Check that both Phage+AB and AB Only exist at each timepoint.\n")
+  print(delta_by_time)
+}
+
+write_tsv(dunn_time,"./export/dunn_post_hoc_synergy_mag.tsv")
+```
+
+```{r}
+# ============================================================
+# DATA FOR PLOT
+# ============================================================
+
+# Delta summary per timepoint
+delta_summary <- delta_by_time %>%
+  group_by(time) %>%
+  summarise(
+    mean_delta = mean(delta, na.rm = TRUE),
+    sd_delta   = sd(delta,   na.rm = TRUE),
+    se_delta   = sd_delta / sqrt(n()),
+    n          = n(),
+    .groups    = "drop"
+  )
+
+# Compact letter display from Dunn results
+# Groups: 2h=a, 4h&6h=b (not different), 10h&24h=a
+cld_labels <- tibble(
+  time       = c(2,    4,    6,    10,   24),
+  cld        = c("a",  "b",  "b",  "a",  "a"),   # same letter = not significantly different
+  y_pos      = delta_summary$mean_delta +
+               delta_summary$se_delta + 0.4
+)
+
+# Phase annotations
+phases <- tibble(
+  xmin  = c(0.5, 1.5, 3.5),
+  xmax  = c(1.5, 3.5, 5.5),
+  label = c("Early\n(building)", "Peak synergy\n(4h ≈ 6h)", "Declining\n(regrowth)"),
+  col   = c("#F39C12",            "#8E44AD",                  "#E74C3C")
+)
+
+# ============================================================
+# PLOT
+# ============================================================
+
+p_timepoint_synergy <- ggplot(delta_summary, aes(x = factor(time), y = mean_delta)) +
+
+  # Phase background shading
+  annotate("rect",
+           xmin  = phases$xmin, xmax = phases$xmax,
+           ymin  = -Inf,        ymax = Inf,
+           fill  = phases$col,  alpha = 0.1) +
+  annotate("text",
+           x     = rowMeans(cbind(phases$xmin, phases$xmax)),
+           y     = Inf,
+           label = phases$label,
+           vjust = 1.3, size = 4,
+           color = phases$col, fontface = "bold") +
+
+  # Reference lines
+  geom_hline(yintercept = 0, linetype = "dashed",
+             color = "grey40", linewidth = 0.7) +
+  geom_hline(yintercept = c(1, 2), linetype = "dotted",
+             color = "#8E44AD", alpha = 0.5, linewidth = 0.6) +
+  annotate("text", x = 0.55, y = c(1.08, 2.08),
+           label = c("≥1 log synergy", "≥2 log synergy"),
+           size = 2.8, color = "#8E44AD", hjust = 0) +
+
+  # Individual observations (jitter)
+  geom_jitter(data = delta_by_time,
+              aes(x = factor(time), y = delta),
+              width = 0.1, size = 3,
+              alpha = 0.5, color = "black",fill="#605B51", shape = 21) +
+
+  # Connecting line through means
+  geom_line(aes(group = 1),
+            color = "#8E44AD", linewidth = 0.8,
+            linetype = "solid", alpha = 0.6) +
+
+  # Error bars
+  geom_errorbar(aes(ymin = mean_delta - se_delta,
+                    ymax = mean_delta + se_delta),
+                width = 0.15, linewidth = 0.8,
+                color = "#8E44AD") +
+
+  # Mean points — highlight 4h & 6h
+  geom_point(aes(fill = factor(time) %in% c("4", "6")),
+             shape = 21, size = 5,
+             color = "white", stroke = 1) +
+  scale_fill_manual(values = c("TRUE"  = "#8E44AD",
+                                "FALSE" = "#AAB7B8"),
+                    guide = "none") +
+
+  # Compact letter display (CLD)
+  geom_text(data = cld_labels,
+            aes(x = factor(time), y = y_pos, label = cld),
+            size = 4.5, fontface = "bold", color = "black",
+            inherit.aes = FALSE) +
+
+
+  scale_x_discrete(labels = paste0(c(2, 4, 6, 10, 24), "h")) +
+  scale_y_continuous(breaks = seq(-4, ceiling(max(delta_by_time$delta,
+                                                   na.rm = TRUE)) + 1, 1)) +
+  labs(
+    x        = "Time (hours)",
+    y        = "Δlog₁₀ CFU/mL (synergy)"
+  ) + theme_tk 
+```
+
+```{r}
+library(patchwork)
+
+# Row 1: Kill curves side by side
+row1 <- (p_ab | p_phage) + plot_layout(guides = "collect") & theme(legend.position = "top")
+
+# Row 2: Synergy bubble + Timepoint stats
+row2 <- (p_synergy_bubble / p_timepoint_synergy) +  plot_layout(heights = c(1, 1))
+
+# Combine
+final_figure <- row1 / row2 +
+  plot_layout(heights = c(1, 1.5)) +
+  plot_annotation(tag_levels =  "A") &
+  theme(plot.margin = margin(1, 1, 1, 1),
+        axis.title.y.left = element_text(size = 10),plot.tag = element_text(size=11,face="bold"))
+
+ggsave("./figures/time_kill_combined2.png",width=10,height=13,device="png")
+
+```
+
+
+
+

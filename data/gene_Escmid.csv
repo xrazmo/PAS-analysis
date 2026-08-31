@@ -1,0 +1,116 @@
+gene_name,category,short_name
+ompC,Porin,por
+ompF,Porin,por
+ompG,Porin,por
+ompL,Porin,por
+ompN,Porin,por
+ompW,Porin,por
+ompX,Porin,por
+lpp,Outer membrane structural,mems
+ompA,Outer membrane structural,mems
+lptA,LPS transport system (Lpt),lpt
+lptB,LPS transport system (Lpt),lpt
+lptC,LPS transport system (Lpt),lpt
+lptD,LPS transport system (Lpt),lpt
+lptE,LPS transport system (Lpt),lpt
+lptF,LPS transport system (Lpt),lpt
+lptG,LPS transport system (Lpt),lpt
+waaA,LPS core biosynthesis,lps
+waaC,LPS core biosynthesis,lps
+waaF,LPS core biosynthesis,lps
+waaG,LPS core biosynthesis,lps
+waaH,LPS core biosynthesis,lps
+waaP,LPS core biosynthesis,lps
+waaQ,LPS core biosynthesis,lps
+cpxA,Envelope stress response,enstr
+cpxP,Envelope stress response,enstr
+cpxR,Envelope stress response,enstr
+degP,Envelope stress response,enstr
+rpoE,Envelope stress response,enstr
+ftsB,Cell division,div
+ftsH,Cell division,div
+ftsI,Cell division,div
+ftsK,Cell division,div
+ftsL,Cell division,div
+ftsW,Cell division,div
+mraZ,Cell division,div
+wza,Capsule / O-antigen transport,cap
+wzxC,Capsule / O-antigen transport,cap
+wzxE,Capsule / O-antigen transport,cap
+wzyE,Capsule / O-antigen transport,cap
+bamA,Bam complex (OM protein assembly),bam
+bamB,Bam complex (OM protein assembly),bam
+bamC,Bam complex (OM protein assembly),bam
+bamD,Bam complex (OM protein assembly),bam
+bamE,Bam complex (OM protein assembly),bam
+pspA,Phage shock protein,psp
+pspB,Phage shock protein,psp
+pspC,Phage shock protein,psp
+pspD,Phage shock protein,psp
+pspE,Phage shock protein,psp
+pspF,Phage shock protein,psp
+pspG,Phage shock protein,psp
+tolC,Efflux,eff
+acrB,Efflux,eff
+acrA,Efflux,eff
+acrR,Efflux,eff
+acrZ,Efflux,eff
+acrD,Efflux,eff
+acrE,Efflux,eff
+acrF,Efflux,eff
+mdtG,Efflux,eff
+mdtH,Efflux,eff
+mdtI,Efflux,eff
+mdtJ,Efflux,eff
+mdtA,Efflux,eff
+mdtB,Efflux,eff
+mdtC,Efflux,eff
+mdtD,Efflux,eff
+mdtE,Efflux,eff
+mdtF,Efflux,eff
+mdtL,Efflux,eff
+mdtP,Efflux,eff
+mdtO,Efflux,eff
+mdtN,Efflux,eff
+mdtK,Efflux,eff
+marC,Efflux regulator,effr
+marR,Efflux regulator,effr
+marA,Efflux regulator,effr
+marB,Efflux regulator,effr
+soxS,Efflux regulator,effr
+soxR,Efflux regulator,effr
+rob,Efflux regulator,effr
+recA,SOS-response / DNA-damage,sos
+lexA,SOS-response / DNA-damage,sos
+sulA,SOS-response / DNA-damage,sos
+umuD,SOS-response / DNA-damage,sos
+umuC,SOS-response / DNA-damage,sos
+dinB,SOS-response / DNA-damage,sos
+recN,SOS-response / DNA-damage,sos
+recX,SOS-response / DNA-damage,sos
+recF,SOS-response / DNA-damage,sos
+recO,SOS-response / DNA-damage,sos
+recR,SOS-response / DNA-damage,sos
+recB,SOS-response / DNA-damage,sos
+recC,SOS-response / DNA-damage,sos
+recD,SOS-response / DNA-damage,sos
+ruvA,SOS-response / DNA-damage,sos
+ruvB,SOS-response / DNA-damage,sos
+ruvC,SOS-response / DNA-damage,sos
+uvrA,SOS-response / DNA-damage,sos
+uvrB,SOS-response / DNA-damage,sos
+uvrC,SOS-response / DNA-damage,sos
+uvrD,SOS-response / DNA-damage,sos
+mutS,SOS-response / DNA-damage,sos
+mutL,SOS-response / DNA-damage,sos
+mutH,SOS-response / DNA-damage,sos
+polB,SOS-response / DNA-damage,sos
+ssb,SOS-response / DNA-damage,sos
+xthA,SOS-response / DNA-damage,sos
+nfo,SOS-response / DNA-damage,sos
+sbcC,SOS-response / DNA-damage,sos
+sbcD,SOS-response / DNA-damage,sos
+dinI,SOS-response / DNA-damage,sos
+rpoS,SOS-response / DNA-damage,sos
+fimA,Virulence,vf
+tisB,Virulence,vf

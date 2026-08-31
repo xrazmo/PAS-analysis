@@ -1,0 +1,27 @@
+﻿gene_name,category
+csgA,Adhesion/biofilm/immune evasion
+csgB,Adhesion/biofilm/immune evasion
+csgC,Adhesion/biofilm/immune evasion
+csgD,Adhesion/biofilm/immune evasion
+pgaA,Biofilm matrix
+pgaB,Biofilm matrix
+pgaC,Biofilm matrix
+pgaD,Biofilm matrix
+fimA,type 1 fimbriae (Bladder colonisation)
+fimA_1,type 1 fimbriae (Bladder colonisation)
+fimH,type 1 fimbriae (Bladder colonisation)
+hlyA,Cytotoxin
+hlyB,Cytotoxin
+hlyC,Cytotoxin
+hylD,Cytotoxin
+cnf1,Cytotoxin
+fyuA,Iron acquisition
+fyuP,Iron acquisition
+hipA,TAS
+hipB,TAS
+tisB,TAS
+istR,TAS
+mqsR,TAS
+mqsA,TAS
+dinJ,TAS
+relE,TAS

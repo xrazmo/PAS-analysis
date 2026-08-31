@@ -1,0 +1,34 @@
+﻿gene_name,category
+bamA,Bam complex (OM protein assembly)
+bamB,Bam complex (OM protein assembly)
+bamC,Bam complex (OM protein assembly)
+bamD,Bam complex (OM protein assembly)
+bamE,Bam complex (OM protein assembly)
+wza,Capsule / O-antigen transport
+wzxC,Capsule / O-antigen transport
+wzxE,Capsule / O-antigen transport
+wzyE,Capsule / O-antigen transport
+degP,Envelope stress response
+rpoE,Envelope stress response
+cpxA,Envelope stress response
+cpxR,Envelope stress response
+cpxP,Envelope stress response
+waaA,LPS core biosynthesis
+waaC,LPS core biosynthesis
+waaF,LPS core biosynthesis
+waaG,LPS core biosynthesis
+waaH,LPS core biosynthesis
+waaP,LPS core biosynthesis
+waaQ,LPS core biosynthesis
+lptA,LPS transport system (Lpt)
+lptB,LPS transport system (Lpt)
+lptC,LPS transport system (Lpt)
+lptD,LPS transport system (Lpt)
+lptE,LPS transport system (Lpt)
+lptF,LPS transport system (Lpt)
+lptG,LPS transport system (Lpt)
+tolA,Tol-Pal system (Envelope integrity)
+tolB,Tol-Pal system (Envelope integrity)
+tolQ,Tol-Pal system (Envelope integrity)
+tolR,Tol-Pal system (Envelope integrity)
+pal,Tol-Pal system (Envelope integrity)
