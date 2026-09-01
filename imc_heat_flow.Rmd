@@ -17,6 +17,7 @@ rm(list=ls())
 library(tidyverse)
 library(patchwork)
 library(knitr)
+library(DescTools)
 
 theme_tk <- theme_bw(base_size = 12) +
   theme(
@@ -29,140 +30,315 @@ theme_tk <- theme_bw(base_size = 12) +
 # USER PARAMETERS
 # ============================================================
 
-heat_file <- "../../time_kill_data/heat_flow_digitized_0.25h_from_heat_png.csv"
+signals_file  <- "data/calscreener/expriments_PAS_signals_long.csv"
+metadata_file <- "data/calscreener/expriments_PAS_well_metadata.csv"
+specs_file    <- "data/calscreener/device_specs.csv"
 
-# Colors per condition
+# Curves before this time are dominated by the instrument's insertion/
+# equilibration transient (large positive/negative swings unrelated to
+# bacterial metabolism) and are excluded from plots and derived metrics.
+startup_exclude_h <- 1
+
+# Bin width (h) used to downsample the ~2s-resolution raw signal for
+# plotting and summary statistics.
+bin_width_h <- 0.1
+
+# Colors per condition. AB 8 mg/L is kept (it is the isolate's known
+# broth-microdilution ATM-AVI MIC, so the IMC-based MIC confirmation section
+# needs it). AB 16 mg/L is excluded (see Data Import note): redundant above
+# the known MIC, and was the source of the original interval-ratio-method
+# instability that led to replacing that method.
 curve_colors <- c(
-  "Bacteria"       = "#2C3E50",   # Dark grey
-  "AB 8 mg/L"      = "#922B21",   # Dark red
-  "AB 4 mg/L"      = "#E74C3C",   # Red
-  "AB 2 mg/L"      = "#E67E22",   # Orange
-  "AB 1 mg/L"      = "#F39C12",   # Amber
-  "AB 0.5 mg/L"    = "#FAD7A0",   # Light amber
-  "Phage"    = "#2980B9",   # Blue
-  "Media ctrl"     = "#BDC3C7",   # Grey
-  "Phage + AB 4 mg/L" = "#6C3483",   # Dark purple  ← transcriptomics condition
-  "Phage + AB 2 mg/L" = "#8E44AD",   # Purple
-  "Phage + AB 1 mg/L" = "#BB8FCE",   # Medium purple
-  "Phage + AB 0.5 mg/L"= "#D7BDE2"  # Light purple
+  "Bacteria"            = "#2C3E50",   # Dark grey
+  "AB 8 mg/L"           = "#922B21",   # Dark red
+  "AB 2 mg/L"           = "#E67E22",   # Orange
+  "AB 1 mg/L"           = "#F39C12",   # Amber
+  "AB 0.5 mg/L"         = "#FAD7A0",   # Light amber
+  "Phage"               = "#2980B9",   # Blue
+  "Media ctrl"          = "#BDC3C7",   # Grey
+  "Phage + AB 2 mg/L"   = "#8E44AD",   # Purple  <- highest-dose combo available
+  "Phage + AB 1 mg/L"   = "#BB8FCE",   # Medium purple
+  "Phage + AB 0.5 mg/L" = "#D7BDE2"    # Light purple
 )
 
 # Line types
 curve_lty <- c(
-  "Bacteria"        = "solid",
-  "AB 8 mg/L"       = "dashed",
-  "AB 4 mg/L"       = "dashed",
-  "AB 2 mg/L"       = "dashed",
-  "AB 1 mg/L"       = "dashed",
-  "AB 0.5 mg/L"     = "dashed",
-  "Phage"     = "dotdash",
-  "Media ctrl"      = "dotted",
-  "Phage + AB 4 mg/L"  = "solid",    # Highlight
-  "Phage + AB 2 mg/L"  = "solid",
-  "Phage + AB 1 mg/L"  = "solid",
-  "Phage + AB 0.5 mg/L"= "solid"
+  "Bacteria"            = "solid",
+  "AB 8 mg/L"           = "dashed",
+  "AB 2 mg/L"           = "dashed",
+  "AB 1 mg/L"           = "dashed",
+  "AB 0.5 mg/L"         = "dashed",
+  "Phage"               = "dotdash",
+  "Media ctrl"          = "dotted",
+  "Phage + AB 2 mg/L"   = "solid",     # Highlight - highest-dose combo available
+  "Phage + AB 1 mg/L"   = "solid",
+  "Phage + AB 0.5 mg/L" = "solid"
 )
 ```
 
 ## Data Import & Cleaning
 
-```{r data_prep}
-raw <- read.csv(heat_file, stringsAsFactors = FALSE)
+> Data are the real CalScreener export (`data/calscreener/`), replacing the
+> earlier workflow that read heat-flow curves digitized by hand from
+> screenshots of the CalScreener software
+> (`data/calscreener/old/heat_flow_digitized_0.25h_from_heat_png.csv`, no
+> longer used). This batch is a single 48-well experiment
+> ("Hanna 456 10P1 2 1 0.5 repeat 10-17-2023") with triplicate wells per
+> condition (duplicate for `CTL MH`), and reference wells (rows A and F)
+> excluded from analysis.
+>
+> **Note:** this batch's phage+antibiotic combination wells only go up to
+> 2 mg/L ATM-AVI (0.5 / 1 / 2 mg/L). It does not include a 4 mg/L or 8 mg/L
+> phage+antibiotic combination well, so this dataset cannot support any
+> claim about phage + 4 mg/L specifically (e.g. matching the manuscript's
+> 4 mg/L transcriptomics condition) -- that requires a separate IMC run.
+> Statements below are restricted to the available 0.5-2 mg/L combination
+> data.
+>
+> **AB 16 mg/L is excluded from this analysis entirely.** It is redundant
+> above the isolate's known broth-microdilution ATM-AVI MIC (8 mg/L) and was
+> also the concentration where a first attempt at IMC-based MIC confirmation
+> (a 30-minute-interval heat ratio, following Tellapragada et al.) was least
+> stable (see "Antibiotic-Only MIC Confirmation" below for what replaced that
+> method). **AB 8 mg/L is retained** because it is the isolate's known MIC
+> and is needed there to check the IMC-derived result against it.
+>
+> **Processing order** (raw -> calibration check -> baseline correction ->
+> smoothing -> replicate aggregation -> optional relative normalization),
+> reconstructing what calView itself computed rather than assuming a
+> transformation:
+>
+> 1. `signal_raw` (not the earlier `signal_uW` convenience column) is the
+>    starting measurement for every well.
+> 2. **Calibration check**: `device_specs.csv` provides a per-channel
+>    `gain`/`offset_W`. As an external validation (documented in this
+>    project's calibration audit, not re-run inside this Rmd), five candidate
+>    transformations of `signal_raw` (raw as-is; +offset; x gain;
+>    x gain + offset; (+offset) x gain) were each averaged over that well's
+>    own stored baseline window (`baseline_start_s`-`baseline_end_s`) and
+>    compared against calView's own saved `baseline_average_signal` across
+>    all 48 wells, and independently cross-checked against calView's saved
+>    `main_integral_value`. **Result: `signal_raw` used as-is reproduces both
+>    quantities almost exactly** (mean |reconstructed - xml_baseline| ~2e-8 W
+>    across 48 wells; integral ratio within 5% of 1.0 for 37/41 wells with
+>    non-negligible baselines -- 4 exceptions noted below), while every
+>    transform involving `gain`/`offset_W` was off by 2-3 orders of
+>    magnitude. This means `signal_raw` is already calView's calibrated
+>    signal (gain/offset already applied upstream) -- applying
+>    `device_specs.csv` again here would double-calibrate, so only the
+>    single check below (reproducing `baseline_average_signal`) is re-run in
+>    this Rmd; `specs` (loaded from `device_specs.csv`) is otherwise unused.
+>    **4 wells did not reproduce `main_integral_value` within 5%** (C6: ratio
+>    ~1.08; C7: ~1.96; D1: ~0.70; D3: ~0.74) -- two are Phage + 2 mg/L
+>    replicate wells (C6/C7) and two are AB 1 mg/L replicate wells (D1/D3).
+>    The cause was not resolved (most likely a small difference between this
+>    Rmd's trapezoidal integration and calView's internal integration at the
+>    window edges); results for these four wells' conditions should be read
+>    with that residual uncertainty in mind.
+> 3. **Baseline correction** (a different thing from calibration): each
+>    well's own `baseline_average_signal` is subtracted from its raw signal,
+>    matching how calView's `main_integral_value` is itself defined.
+> 4. Reference wells (rows A/F, `is_reference = TRUE`) are excluded from
+>    biological analysis (kept only for QC) -- per-well baseline correction
+>    is used instead of subtracting a reference well, since the device
+>    operates in differential mode and reference handling is assumed to
+>    already be reflected in the exported signal.
+> 5. Only after per-well calibration and baseline correction are replicate
+>    wells averaged (never average raw signal across replicates first).
+>
+> **Replicates are technical, not biological:** all wells in this batch come
+> from one CalScreener experiment (one plate, one run); the n=2-3 "replicate
+> wells" per condition are technical replicate wells within that single
+> experiment, not independent biological experiments. This is stated
+> explicitly wherever replicate counts are reported below, and is why no
+> inferential statistics (p-values) are computed on them (see Descriptive
+> Comparisons).
 
-heat <- raw %>%
+```{r data_prep}
+meta <- read_csv(metadata_file, show_col_types = FALSE)
+signals <- read_csv(signals_file, show_col_types = FALSE)
+specs <- read_csv(specs_file, show_col_types = FALSE)
+
+# ------------------------------------------------------------------
+# Step 1-2: calibration check. Confirms signal_raw needs no gain/offset
+# transform before it is used as the heat-flow measurement (see note above).
+# ------------------------------------------------------------------
+baseline_windows <- meta %>%
+  select(well, baseline_start_s, baseline_end_s, baseline_average_signal)
+
+calib_check <- signals %>%
+  select(well, time_s, signal_raw) %>%
+  inner_join(baseline_windows, by = "well") %>%
+  filter(time_s >= baseline_start_s, time_s <= baseline_end_s) %>%
+  summarise(recon_raw = mean(signal_raw),
+            baseline_average_signal = first(baseline_average_signal),
+            .by = well) %>%
+  mutate(abs_diff = abs(recon_raw - baseline_average_signal))
+
+cat("Calibration check (signal_raw vs. calView baseline_average_signal):\n")
+cat("  Mean |diff| across", nrow(calib_check), "wells:", mean(calib_check$abs_diff), "\n")
+cat("  Max  |diff|:", max(calib_check$abs_diff), "\n")
+cat("  -> signal_raw used as-is; no gain/offset applied.\n")
+
+# ------------------------------------------------------------------
+# Second validation: reproduce calView's own main-section integral
+# (IntegralValue) as the trapezoidal integral of the baseline-corrected
+# signal over the stored main window. Confirms the baseline-correction
+# step (not just the raw signal itself) matches calView's definition.
+# ------------------------------------------------------------------
+main_windows <- meta %>%
+  select(well, main_start_s, main_end_s, main_integral_value, baseline_average_signal)
+
+integral_check <- signals %>%
+  select(well, time_s, signal_raw) %>%
+  inner_join(main_windows, by = "well") %>%
+  filter(time_s >= main_start_s, time_s <= main_end_s) %>%
+  arrange(well, time_s) %>%
+  summarise(
+    auc_baseline_sub = DescTools::AUC(time_s, signal_raw - first(baseline_average_signal),
+                                       method = "trapezoid"),
+    main_integral_value = first(main_integral_value),
+    .by = well
+  ) %>%
+  filter(abs(main_integral_value) > 0.05) %>%  # exclude near-zero denominators
+  mutate(ratio = main_integral_value / auc_baseline_sub)
+
+cat("\nIntegral check (baseline-corrected AUC vs. calView main_integral_value):\n")
+cat("  Wells tested (|integral| > 0.05):", nrow(integral_check), "\n")
+cat("  Median ratio (xml / reconstructed):", median(integral_check$ratio, na.rm = TRUE), "\n")
+cat("  Wells within 5% of ratio 1.0:",
+    sum(abs(integral_check$ratio - 1) < 0.05, na.rm = TRUE), "/", nrow(integral_check), "\n")
+cat("  -> baseline-corrected signal_raw, integrated over calView's stored\n")
+cat("     main window, reproduces calView's own IntegralValue.\n")
+cat("  Wells outside 5% (unresolved discrepancy):\n")
+integral_check %>%
+  filter(abs(ratio - 1) >= 0.05) %>%
+  select(well, main_integral_value, auc_baseline_sub, ratio) %>%
+  print()
+
+# Well -> condition mapping, derived from the real sample names recorded by
+# the CalScreener software (see metadata `sample_name` / `repeat_group`).
+# CTL BACT 16 (AB 16 mg/L) is intentionally left out of this lookup -- see
+# Data Import note -- so its wells are dropped by the inner_join below
+# (sample_name has no match -> row is dropped).
+condition_lookup <- tribble(
+  ~sample_name,     ~condition,              ~group,
+  "CTL BACT",       "Bacteria",              "Bacteria",
+  "CTL BACT 0.5",   "AB 0.5 mg/L",           "AB only",
+  "CTL BACT 1",     "AB 1 mg/L",             "AB only",
+  "CTL BACT 2",     "AB 2 mg/L",             "AB only",
+  "CTL BACT 8",     "AB 8 mg/L",             "AB only",
+  "CTL EC10P1",     "Phage",                 "Phage alone",
+  "CTL MH",         "Media ctrl",            "Control",
+  "10P1 0.5MG",     "Phage + AB 0.5 mg/L",   "Phage + AB",
+  "10P1 1MG",       "Phage + AB 1 mg/L",     "Phage + AB",
+  "10P1 2MG",       "Phage + AB 2 mg/L",     "Phage + AB"
+)
+
+meta_use <- meta %>%
+  filter(!is_reference) %>%
+  select(well, sample_name, repeat_group, baseline_average_signal) %>%
+  inner_join(condition_lookup, by = "sample_name") %>%
   mutate(
-    condition = case_when(
-      well == "B1" ~ "Bacteria",
-      well == "B2" ~ "AB 8 mg/L",
-      well == "B3" ~ "AB 4 mg/L",
-      well == "B4" ~ "AB 2 mg/L",
-      well == "B5" ~ "AB 1 mg/L",
-      well == "B6" ~ "AB 0.5 mg/L",
-      well == "C1" ~ "Phage",
-      well == "C2" ~ "Media ctrl",
-      well == "C3" ~ "Phage + AB 4 mg/L",
-      well == "C4" ~ "Phage + AB 2 mg/L",
-      well == "C5" ~ "Phage + AB 1 mg/L",
-      well == "C6" ~ "Phage + AB 0.5 mg/L"
-    ),
-    group = case_when(
-      well %in% c("B2","B3","B4","B5","B6") ~ "AB only",
-      well %in% c("C3","C4","C5","C6")      ~ "Phage + AB",
-      well == "C1"                           ~ "Phage + bacteria",
-      well == "B1"                           ~ "Bacteria",
-      TRUE                                   ~ "Control"
-    ),
-    # Extract AB concentration
     ab_conc = case_when(
       str_detect(condition, "0\\.5") ~ 0.5,
       str_detect(condition, "1 mg")  ~ 1,
       str_detect(condition, "2 mg")  ~ 2,
-      str_detect(condition, "4 mg")  ~ 4,
       str_detect(condition, "8 mg")  ~ 8,
       TRUE                           ~ 0
     ),
     condition = factor(condition, levels = names(curve_colors)),
-    # Flag transcriptomics condition
-    is_transcriptomics = well == "C3"
+    replicate = as.integer(factor(well)),
+    .by = sample_name
   )
 
-cat("Wells:", unique(heat$well), "\n")
-cat("Time range:", min(heat$time_h), "–", max(heat$time_h), "h\n")
-cat("Resolution: 0.25h\n")
-cat("Transcriptomics condition present (C3 = Phage + 4mg/L):", 
-    "C3" %in% unique(heat$well), "\n")
+# ------------------------------------------------------------------
+# Step 3: per-well baseline correction, applied to signal_raw (W) before
+# any unit conversion or replicate averaging.
+# ------------------------------------------------------------------
+heat_full <- signals %>%
+  filter(well %in% meta_use$well) %>%
+  select(time_h, well, signal_raw) %>%
+  left_join(meta_use, by = "well") %>%
+  mutate(
+    heat_flow_W  = signal_raw,
+    heat_flow_relative = (heat_flow_W - baseline_average_signal) * 1e6  # W -> uW
+  ) %>%
+  filter(time_h >= startup_exclude_h)
 
-write_tsv(heat,'../../time_kill_data/heat_flow_metadata.tsv')
+# Downsample to a regular time grid for plotting / derived metrics, keeping
+# per-well resolution (no averaging across replicates yet -- step 5).
+heat <- heat_full %>%
+  mutate(time_h = round(time_h / bin_width_h) * bin_width_h) %>%
+  summarise(
+    heat_flow_relative = mean(heat_flow_relative),
+    .by = c(well, sample_name, repeat_group, condition, group, ab_conc, replicate, time_h)
+  ) %>%
+  arrange(well, time_h)
+
+cat("\nWells:", n_distinct(heat$well), "\n")
+cat("Conditions:", n_distinct(heat$condition), "\n")
+cat("Replicates per condition:\n")
+print(heat %>% distinct(condition, well) %>% count(condition, name = "n_replicates"))
+cat("Time range:", round(min(heat$time_h), 2), "-", round(max(heat$time_h), 2), "h\n")
+cat("Bin width:", bin_width_h, "h\n")
+
+write_tsv(heat, "output/heat_flow_metadata.tsv")
 ```
 
 ---
 
 ## Plot 1: All Curves Overview
 
-> Full reproduction of Figure 2 from the digitized data.
+> Mean curve per condition (across replicate wells), with a shaded ribbon
+> showing +/- 1 SD across replicates.
 
 ```{r plot_all, fig.height=5, fig.width=11}
-# Find peak of each curve
-peaks <- heat %>%
-  filter(!well %in% c("C2")) %>%   # Exclude media control
-  group_by(condition, well) %>%
-  slice_max(heat_flow_relative, n = 1) %>%
-  ungroup()
+heat_summary <- heat %>%
+  filter(condition != "Media ctrl") %>%
+  summarise(
+    mean_hf = mean(heat_flow_relative),
+    sd_hf   = sd(heat_flow_relative),
+    n       = n(),
+    .by     = c(condition, group, ab_conc, time_h)
+  )
 
-p_peaks <- ggplot(heat %>% filter(well != "C2"),
-       aes(x = time_h, y = heat_flow_relative,
+# Find peak of each condition's mean curve
+peaks <- heat_summary %>%
+  slice_max(mean_hf, n = 1, by = condition)
+
+p_peaks <- ggplot(heat_summary,
+       aes(x = time_h, y = mean_hf,
            color = condition, linetype = condition,
            group = condition)) +
 
-  # # Highlight transcriptomics timepoint
+  # Highlight 4h reference (harvest point used for transcriptomics; see note above)
   annotate("rect", xmin = 3.8, xmax = 4.2,
            ymin = -Inf, ymax = Inf,
            fill = "#E74C3C", alpha = 0.08) +
-  # annotate("text", x = 4, y = max(heat$heat_flow_relative) * 1.02,
-  #          label = "4h\n(Transcriptomics)", size = 2.8,
-  #          color = "#E74C3C", fontface = "italic", hjust = 0.5) +
+
+  geom_ribbon(aes(ymin = mean_hf - sd_hf, ymax = mean_hf + sd_hf, fill = condition),
+              color = NA, alpha = 0.12, show.legend = FALSE) +
 
   geom_line(linewidth = 0.9, alpha = 0.9) +
 
   # Mark peaks
   geom_point(data = peaks,
-             aes(x = time_h, y = heat_flow_relative),
+             aes(x = time_h, y = mean_hf),
              shape = 21, size = 3,
              fill = "white", stroke = 1) +
 
   scale_color_manual(values    = curve_colors)    +
+  scale_fill_manual(values     = curve_colors)    +
   scale_linetype_manual(values = curve_lty)       +
   scale_x_continuous(breaks = seq(0, 25, 2))      +
-  scale_y_continuous(breaks = seq(-1, 2, 0.25))   +
 
   geom_hline(yintercept = 0, linetype = "dashed",
              color = "grey40", linewidth = 0.5)   +
 
   labs(
-    #title    = "IMC Relative Heat Flow — All Conditions",
-    #subtitle = "Open circles = peak metabolic activity | Red band = transcriptomics harvest point (4h)",
     x        = "Time (hours)",
-    y        = "Relative heat flow",
+    y        = "Baseline-corrected heat flow (uW)",
     color    = "",
     linetype = ""
   ) +
@@ -182,64 +358,50 @@ p_peaks
 
 ---
 
-## Plot 2: Faceted — AB only vs Phage+AB
+## Plot 2: Faceted -- AB only vs Phage+AB
 
-> Direct comparison at matched concentrations.
+> Direct comparison at matched concentrations (0.5, 1, 2 mg/L -- the doses
+> present in both the AB-only and Phage+AB arms of this batch), each panel
+> showing mean +/- SD across replicate wells.
 
 ```{r plot_facet, fig.height=7, fig.width=11}
-# Only matched concentrations (0.5, 1, 2, 4 mg/L)
-matched_heat <- heat %>%
-  filter(ab_conc %in% c(0.5, 1, 2, 4) | well %in% c("B1","C1")) %>%
-  filter(well != "C2") %>%
+ab_facet_levels <- c("Control", "0.5 mg/L", "1 mg/L", "2 mg/L")
+
+plot_facet_df <- heat_summary %>%
+  filter(ab_conc %in% c(0.5, 1, 2), !condition %in% c("Bacteria", "Phage")) %>%
   mutate(
-    ab_label  = ifelse(ab_conc == 0, "Control", paste0(ab_conc, " mg/L")),
-    ab_label  = factor(ab_label,
-                       levels = c("Control", "0.5 mg/L",
-                                  "1 mg/L", "2 mg/L", "4 mg/L"))
+    ab_label = factor(paste0(ab_conc, " mg/L"), levels = ab_facet_levels),
+    group    = factor(group, levels = c("Bacteria", "Phage alone", "AB only", "Phage + AB"))
   )
 
-# Reference lines: bacteria and phage alone
-bact_curve  <- heat %>% filter(well == "B1") %>%
-  select(time_h, heat_flow_relative) %>%
-  rename(bact_heat = heat_flow_relative)
+# Reference curves (Bacteria, Phage alone) as dedicated data frames, each
+# expanded across the three concentration facets so they're drawn once per
+# facet panel -- not joined onto every row of plot_facet_df, which would
+# otherwise redraw the same reference line once per overlapping condition.
+ref_facets <- tibble(ab_label = factor(c("0.5 mg/L", "1 mg/L", "2 mg/L"), levels = ab_facet_levels))
 
-phage_curve <- heat %>% filter(well == "C1") %>%
-  select(time_h, heat_flow_relative) %>%
-  rename(phage_heat = heat_flow_relative)
+bact_ref <- heat_summary %>% filter(condition == "Bacteria") %>%
+  select(time_h, mean_hf) %>% cross_join(ref_facets) %>%
+  mutate(group = factor("Bacteria", levels = levels(plot_facet_df$group)))
 
-plot_facet_df <- matched_heat %>%
-  filter(!well %in% c("B1", "C1")) %>%
-  left_join(bact_curve,  by = "time_h") %>%
-  left_join(phage_curve, by = "time_h")
+phage_ref <- heat_summary %>% filter(condition == "Phage") %>%
+  select(time_h, mean_hf) %>% cross_join(ref_facets) %>%
+  mutate(group = factor("Phage alone", levels = levels(plot_facet_df$group)))
 
-# Create dummy rows for the legend
-dummy_legend <- tibble(
-  time_h = 1,
-  heat_flow_relative = 0,
-  group = c("Bacteria", "Phage"),
-  ab_label = c("0.5 mg/L","0.5 mg/L")
-)
-df <- bind_rows(plot_facet_df,dummy_legend)
-df <- df %>% mutate(group=factor(group,levels=c("Bacteria","Phage","AB only","Phage + AB")))
+p_mic_curve <- ggplot(plot_facet_df,
+       aes(x = time_h, y = mean_hf, color = group)) +
 
-p_mic_curve <- ggplot(df,
-       aes(x = time_h, y = heat_flow_relative,
-           color = group)) +
+  geom_line(data = bact_ref, aes(color = group),
+            linetype = "twodash", linewidth = 0.5, alpha = 0.7) +
 
-  # Bacteria reference (grey background line)
-  geom_line(aes(y = bact_heat),
-            color = "#2C3E50", linetype = "twodash",
-            linewidth = 0.5, alpha = 0.7) +
+  geom_line(data = phage_ref, aes(color = group),
+            linetype = "twodash", linewidth = 0.5, alpha = 0.7) +
 
-  # Phage alone reference (blue background line)
-  geom_line(aes(y = phage_heat),
-            color = "#2980B9", linetype = "twodash",
-            linewidth = 0.5, alpha = 0.7) +
+  geom_ribbon(aes(ymin = mean_hf - sd_hf, ymax = mean_hf + sd_hf, fill = group),
+              color = NA, alpha = 0.12, show.legend = FALSE) +
 
-  # Main curves
   geom_line(linewidth = 1) +
 
-  # Highlight 4h
   geom_vline(xintercept = 4, linetype = "dashed",
              color = "#E74C3C", alpha = 0.5) +
 
@@ -249,23 +411,21 @@ p_mic_curve <- ggplot(df,
   facet_wrap(~ab_label, nrow = 1) +
 
   scale_color_manual(values = c(
-    "Bacteria" = "#2C3E50",
-    "Phage" = "#2980B9",
-    "AB only"    = "#E74C3C",
-    "Phage + AB" = "#8E44AD"
+    "Bacteria"    = "#2C3E50",
+    "Phage alone" = "#2980B9",
+    "AB only"     = "#E74C3C",
+    "Phage + AB"  = "#8E44AD"
   )) +
-  scale_linetype_manual(values = c(
-    "Bacteria" = "twodash",
-    "Phage" = "twodash",
-    "AB only"    = "solid",
-    "Phage + AB" = "solid"
+  scale_fill_manual(values = c(
+    "Bacteria"    = "#2C3E50",
+    "Phage alone" = "#2980B9",
+    "AB only"     = "#E74C3C",
+    "Phage + AB"  = "#8E44AD"
   )) +
   scale_x_continuous(breaks = seq(0, 25, 4)) +
   labs(
-    #title    = "IMC Curves: AB Only vs Phage + AB at Matched Concentrations",
-    #subtitle = "Grey = bacteria alone | Blue dotted = phage alone | Red line = 4h transcriptomics point",
     x        = "Time (hours)",
-    y        = "Relative heat flow",
+    y        = "Baseline-corrected heat flow (uW)",
     color="",linetype=""
   ) +
   theme_tk +
@@ -274,7 +434,7 @@ p_mic_curve <- ggplot(df,
     plot.tag        = element_text(face = "bold", size = 12),
     strip.background = element_blank(),
     strip.text = element_text(size =9, face= "bold")
-  ) + 
+  ) +
 guides(
   color = guide_legend(
     nrow = 1,
@@ -284,92 +444,89 @@ guides(
       linewidth = 0.95
     )
   ),
-  linetype = "none"      # Hide duplicate linetype legend
+  linetype = "none"
 )
 p_mic_curve
 ```
 
 ---
 
-## Plot 3: Highlight Transcriptomics Condition (C3 = Phage + 4 mg/L)
+## Plot 3: Highlight Highest-Dose Combination (Phage + AB 2 mg/L)
 
-> Focuses on the specific condition used for transcriptomics.
+> Focuses on the highest-dose phage+antibiotic combination available in this
+> batch. The original design highlighted phage + 4 mg/L as the transcriptomics
+> condition, but this batch's combination wells stop at 2 mg/L (see note in
+> Data Import).
 
 ```{r plot_transcriptomics, fig.height=5, fig.width=10}
-# Key curves for this comparison
-key_wells <- c("B1", "B3", "C1", "C3")   # Bacteria, AB 4mg/L, Phage, Phage+4mg/L
+key_conditions <- c("Bacteria", "AB 2 mg/L", "Phage", "Phage + AB 2 mg/L")
 
-key_heat <- heat %>%
-  filter(well %in% key_wells) %>%
+key_heat <- heat_summary %>%
+  filter(condition %in% key_conditions) %>%
   mutate(
     label = case_when(
-      well == "B1" ~ "Bacteria alone",
-      well == "B3" ~ "AB 4 mg/L alone",
-      well == "C1" ~ "Phage alone",
-      well == "C3" ~ "Phage + AB 4 mg/L\n(Transcriptomics condition)"
+      condition == "Bacteria"             ~ "Bacteria alone",
+      condition == "AB 2 mg/L"            ~ "AB 2 mg/L alone",
+      condition == "Phage"                ~ "Phage alone",
+      condition == "Phage + AB 2 mg/L"    ~ "Phage + AB 2 mg/L\n(highest-dose combo)"
     ),
     label = factor(label, levels = c(
       "Bacteria alone",
-      "AB 4 mg/L alone",
+      "AB 2 mg/L alone",
       "Phage alone",
-      "Phage + AB 4 mg/L\n(Transcriptomics condition)"
+      "Phage + AB 2 mg/L\n(highest-dose combo)"
     ))
   )
 
-# Peak values for annotation
 key_peaks <- key_heat %>%
-  group_by(label, well) %>%
-  slice_max(heat_flow_relative, n = 1) %>%
-  ungroup()
+  slice_max(mean_hf, n = 1, by = label)
 
 key_colors <- c(
-  "Bacteria alone"                              = "#2C3E50",
-  "AB 4 mg/L alone"                             = "#E74C3C",
-  "Phage alone"                                 = "#2980B9",
-  "Phage + AB 4 mg/L" = "#6C3483"
+  "Bacteria alone"                            = "#2C3E50",
+  "AB 2 mg/L alone"                           = "#E67E22",
+  "Phage alone"                               = "#2980B9",
+  "Phage + AB 2 mg/L\n(highest-dose combo)"   = "#8E44AD"
 )
 
 p_key_peaks <- ggplot(key_heat,
-       aes(x = time_h, y = heat_flow_relative,
+       aes(x = time_h, y = mean_hf,
            color = label, linetype = label)) +
 
-  # 4h harvest shading
   annotate("rect", xmin = 3.8, xmax = 4.2,
            ymin = -Inf, ymax = Inf,
            fill = "#E74C3C", alpha = 0.1) +
-  # annotate("text", x = 4.3, y = 0.95,
-  #          label = "4h harvest", size = 3,
-  #          color = "#E74C3C", fontface = "bold", hjust = 0) +
 
   geom_hline(yintercept = 0, linetype = "dashed",
              color = "grey40", linewidth = 0.5) +
+
+  geom_ribbon(aes(ymin = mean_hf - sd_hf, ymax = mean_hf + sd_hf, fill = label),
+              color = NA, alpha = 0.12, show.legend = FALSE) +
+
   geom_line(linewidth = 1.1) +
 
-  # Peak markers
   geom_point(data = key_peaks,
-             aes(x = time_h, y = heat_flow_relative),
+             aes(x = time_h, y = mean_hf),
              shape = 21, size = 4,
              fill = "white", stroke = 1.2) +
   geom_text(data = key_peaks,
             aes(x = time_h + 0.5,
-                y = heat_flow_relative + 0.04,
+                y = mean_hf + 0.04,
                 label = paste0("Peak: ", round(time_h, 1), "h")),
             size = 3, hjust = 0, show.legend = FALSE) +
 
   scale_color_manual(values    = key_colors) +
+  scale_fill_manual(values     = key_colors) +
   scale_linetype_manual(values = c(
-    "Bacteria alone"                              = "solid",
-    "AB 4 mg/L alone"                             = "dashed",
-    "Phage alone"                                 = "dotted",
-    "Phage + AB 4 mg/L" = "solid"
+    "Bacteria alone"                            = "solid",
+    "AB 2 mg/L alone"                           = "dashed",
+    "Phage alone"                               = "dotted",
+    "Phage + AB 2 mg/L\n(highest-dose combo)"   = "solid"
   )) +
   scale_x_continuous(breaks = seq(0, 25, 2)) +
 
   labs(
-   # title    = "IMC: Transcriptomics Condition in Context",
-  #  subtitle = "Phage + 4 mg/L ATM-AVI (C3) vs each component alone",
     x        = "Time (hours)",
-    y        = "Relative heat flow",
+    y        = "Baseline-corrected heat flow (uW)",
     color    = NULL, linetype = NULL
   ) +
   theme_tk +
@@ -379,10 +536,11 @@ p_key_peaks <- ggplot(key_heat,
     legend.text = element_text(size = 9),
     plot.tag         = element_text(face = "bold", size = 12)
   )
+
+p_key_peaks
 ```
 
 ```{r}
-library(patchwork)
 (p_peaks / p_mic_curve) +  plot_annotation(tag_levels =  "A") &
   theme(plot.margin = margin(1, 1, 1, 1),
         axis.title.y.left = element_text(size = 10),
@@ -394,35 +552,97 @@ ggsave("./figures/heat_flow.pdf",width=12,height = 10,device = "pdf")
 ggsave("./figures/heat_flow.png",width=12,height = 10,device = "png")
 ```
 
-
 ---
 
 ## Derived Metrics from Curves
 
-```{r derived_metrics}
-# Calculate TTP, peak value, area under curve, and value at 4h per well
-library(DescTools)
+> Per-well metrics (time to peak, peak value, AUC, value at 4h), so that
+> replicate variability can be summarized descriptively below (see
+> Statistical Comparisons for why no inferential p-values are computed on
+> these technical replicates).
+>
+> **Time to peak (TTP) caution:** for a well whose curve stays flat/near
+> baseline (e.g. early in a Phage+AB combination before recovery), the
+> "peak" that `which.max()` finds may just be the largest point of residual
+> instrument noise rather than a real metabolic event -- TTP is only
+> meaningful for conditions with a clear, well-separated peak above baseline
+> noise. Time to metabolic recovery (below) is the more robust, principal
+> quantitative endpoint for this reason.
 
+```{r derived_metrics}
 derived <- heat %>%
-  filter(well != "C2") %>%
-  group_by(well, condition, group, ab_conc) %>%
+  filter(condition != "Media ctrl") %>%
   summarise(
     TTP_h        = time_h[which.max(heat_flow_relative)],
     peak_value   = max(heat_flow_relative),
     value_at_4h  = heat_flow_relative[which.min(abs(time_h - 4))],
-    AUC          = AUC(time_h, heat_flow_relative, method = "trapezoid"),
-    first_zero   = min(time_h[heat_flow_relative <= 0], default = NA),
-    .groups      = "drop"
+    AUC          = AUC(time_h, heat_flow_relative, method = "trapezoid"),  # uW * h
+    .by          = c(well, condition, group, ab_conc)
   ) %>%
-  arrange(group, ab_conc)
+  # net baseline-corrected integrated heat: (uW * h) -> J, via
+  # 1 uW*h = 1e-6 W * 3600 s = 3.6e-3 J. Can be slightly negative for a well
+  # that sits at or just below its own baseline for the whole window (signal
+  # noise / residual baseline drift), not evidence of negative heat production.
+  mutate(net_heat_J = AUC * 3.6e-3) %>%
+  arrange(group, ab_conc, well)
 
 derived %>%
   mutate(across(where(is.numeric), ~round(., 3))) %>%
   kable(
     col.names = c("Well", "Condition", "Group", "AB (mg/L)",
-                  "TTP (h)", "Peak value", "Value at 4h",
-                  "AUC", "First crosses zero (h)"),
-    caption   = "Derived metrics from digitized heat flow curves"
+                  "TTP (h)", "Peak value (uW)", "Value at 4h (uW)",
+                  "AUC (uW*h)", "Net integrated heat (J)"),
+    caption   = "Derived metrics per replicate well (real CalScreener export)"
+  )
+```
+
+### Replicate-aware summary
+
+```{r derived_summary}
+derived_summary <- derived %>%
+  summarise(
+    n            = n(),
+    TTP_mean     = mean(TTP_h),        TTP_sd     = sd(TTP_h),
+    peak_mean    = mean(peak_value),   peak_sd    = sd(peak_value),
+    val4h_mean   = mean(value_at_4h),  val4h_sd   = sd(value_at_4h),
+    AUC_mean     = mean(AUC),          AUC_sd     = sd(AUC),
+    heat_J_mean  = mean(net_heat_J),   heat_J_sd  = sd(net_heat_J),
+    .by          = c(condition, group, ab_conc)
+  ) %>%
+  arrange(group, ab_conc)
+
+derived_summary %>%
+  mutate(across(where(is.numeric), ~round(., 3))) %>%
+  kable(
+    caption = "Mean ± SD of derived metrics across replicate wells per condition"
+  )
+```
+
+### Relative heat flow (optional secondary view)
+
+> Absolute calibrated uW (above) is the primary measurement. As a secondary,
+> optional view, each condition's mean curve is also expressed relative to
+> the peak of untreated Bacteria alone -- preserving how much each treatment
+> suppresses metabolic activity relative to the untreated control, rather
+> than normalizing each curve to its own maximum (which would erase
+> between-condition differences in magnitude).
+
+```{r relative_heat_flow}
+bact_peak <- derived_summary %>% filter(condition == "Bacteria") %>% pull(peak_mean)
+
+relative_summary <- derived_summary %>%
+  mutate(peak_relative_to_bact = peak_mean / bact_peak,
+         val4h_relative_to_bact = val4h_mean / bact_peak)
+
+relative_summary %>%
+  select(condition, group, ab_conc, peak_mean, peak_relative_to_bact,
+         val4h_mean, val4h_relative_to_bact) %>%
+  mutate(across(where(is.numeric), ~round(., 3))) %>%
+  kable(
+    col.names = c("Condition", "Group", "AB (mg/L)", "Peak (uW)",
+                  "Peak / Bacteria peak", "Value at 4h (uW)",
+                  "Value at 4h / Bacteria peak"),
+    caption = "Heat flow relative to untreated Bacteria peak (secondary view)"
   )
 ```
 
@@ -430,18 +650,21 @@ derived %>%
 
 ## Plot 4: Derived Metrics Comparison
 
+> Bars show the replicate mean; error bars show +/- 1 SD across replicate
+> wells (n=2-3 per condition).
+
 ```{r plot_derived, fig.height=5, fig.width=11}
-# TTP bar
-p_d1 <- derived %>%
-  filter(well != "C2") %>%
-  mutate(condition = fct_reorder(condition, TTP_h)) %>%
-  ggplot(aes(y = condition, x = TTP_h, fill = group)) +
+p_d1 <- derived_summary %>%
+  mutate(condition = fct_reorder(condition, TTP_mean)) %>%
+  ggplot(aes(y = condition, x = TTP_mean, fill = group)) +
   geom_col(width = 0.7, alpha = 0.85) +
-  geom_vline(xintercept = derived$TTP_h[derived$well == "B1"],
+  geom_errorbar(aes(xmin = TTP_mean - TTP_sd, xmax = TTP_mean + TTP_sd),
+                width = 0.3, linewidth = 0.4, color = "grey30") +
+  geom_vline(xintercept = derived_summary$TTP_mean[derived_summary$condition == "Bacteria"],
              linetype = "dashed", color = "#2C3E50", alpha = 0.7) +
   scale_fill_manual(values = c(
-    "Bacteria"   = "#2C3E50", "Phage alone" = "#2980B9",
-    "AB only"    = "#E67E22", "Phage + AB"  = "#8E44AD"
+    "Bacteria"    = "#2C3E50", "Phage alone" = "#2980B9",
+    "AB only"     = "#E67E22", "Phage + AB"  = "#8E44AD"
   )) +
   labs(x = "Time to Peak (h)", y = NULL,
        fill = NULL, tag = "D") +
@@ -449,17 +672,17 @@ p_d1 <- derived %>%
   theme(legend.position = "bottom",
         plot.tag = element_text(face = "bold", size = 12))
 
-# Heat flow at 4h
-p_d2 <- derived %>%
-  filter(well != "C2") %>%
-  mutate(condition = fct_reorder(condition, -value_at_4h)) %>%
-  ggplot(aes(y = condition, x = value_at_4h, fill = group)) +
+p_d2 <- derived_summary %>%
+  mutate(condition = fct_reorder(condition, -val4h_mean)) %>%
+  ggplot(aes(y = condition, x = val4h_mean, fill = group)) +
   geom_col(width = 0.7, alpha = 0.85) +
+  geom_errorbar(aes(xmin = val4h_mean - val4h_sd, xmax = val4h_mean + val4h_sd),
+                width = 0.3, linewidth = 0.4, color = "grey30") +
   geom_vline(xintercept = 0, color = "grey40",
              linewidth = 0.5, linetype = "dashed") +
   scale_fill_manual(values = c(
-    "Bacteria"   = "#2C3E50", "Phage alone" = "#2980B9",
-    "AB only"    = "#E67E22", "Phage + AB"  = "#8E44AD"
+    "Bacteria"    = "#2C3E50", "Phage alone" = "#2980B9",
+    "AB only"     = "#E67E22", "Phage + AB"  = "#8E44AD"
   )) +
   labs(x = "Relative heat flow at 4h", y = NULL,
        fill = NULL, tag = "E") +
@@ -472,36 +695,413 @@ p_d1 | p_d2
 
 ---
 
+## Time to Metabolic Recovery (principal IMC endpoint)
+
+> Baseline-corrected heat-flow curves are the primary reading of this assay;
+> this metric gives it a quantitative anchor. Time to recovery is defined
+> **operationally**, per well, as the first time baseline-corrected heat
+> flow exceeded 10 uW for at least 30 consecutive minutes. The 10 uW
+> threshold is informed by the stable-signal/inclusion concept used by
+> Tellapragada et al. (Clin Microbiol Infect 2020;
+> https://doi.org/10.1016/j.cmi.2020.01.026) -- it is **not a threshold that
+> paper validated as a "metabolic recovery" cutoff**, and no such validated
+> threshold exists; 10 uW is simply a reasonable, reproducible operational
+> choice adopted here to quantify delayed metabolic recovery, not to assign
+> a growth/no-growth MIC call. A well that never sustains 10 uW for 30
+> minutes within the recorded assay window has no recovery time (reported as
+> not reached, not as 0 or as a missing plot point -- see Plot 5, which shows
+> such wells as right-censored bars rather than dropping them).
+>
+> Because the threshold is operational rather than validated, a small
+> **sensitivity analysis** is run below to check that the ordering of
+> conditions (which is the basis for the manuscript's conclusion) is
+> reasonably robust to the exact threshold chosen, not an artifact of
+> picking 10 uW specifically.
+>
+> The "all points above threshold within the window" check below is
+> equivalent to a run-length/rolling-window implementation for this
+> regularly-sampled (~2s interval) data, but is more sensitive to a single
+> dropped/noisy sample right at the window boundary than a smoothed
+> (e.g. rolling-mean) version would be; this was not judged to change the
+> qualitative recovery-time ordering enough to justify the added complexity
+> for this dataset, but is worth revisiting if timestamps become irregular
+> or noisier in a future run.
+
+```{r recovery_setup}
+recovery_threshold_uW <- 10
+recovery_sustain_h    <- 0.5  # 30 minutes
+
+# First time_h at which heat_flow_relative exceeds the threshold and stays
+# above it for the full sustain window (checked against the native,
+# unbinned per-well time resolution in heat_full, not the 0.1h plotting bins).
+time_to_recovery <- function(time_h, heat_flow_relative,
+                              threshold = recovery_threshold_uW,
+                              sustain_h = recovery_sustain_h) {
+  ord <- order(time_h)
+  t <- time_h[ord]; h <- heat_flow_relative[ord]
+  above <- h > threshold
+  for (i in which(above)) {
+    window_idx <- which(t >= t[i] & t <= t[i] + sustain_h)
+    if (length(window_idx) < 2) next
+    if (all(above[window_idx])) return(t[i])
+  }
+  NA_real_
+}
+
+recovery_by_well <- heat_full %>%
+  filter(condition != "Media ctrl") %>%
+  summarise(
+    recovery_h = time_to_recovery(time_h, heat_flow_relative),
+    .by = c(well, sample_name, condition, group, ab_conc, replicate)
+  )
+
+recovery_by_well %>%
+  arrange(group, ab_conc, well) %>%
+  mutate(recovery_h = round(recovery_h, 2)) %>%
+  kable(
+    col.names = c("Well", "Sample", "Condition", "Group", "AB (mg/L)", "Replicate", "Recovery (h)"),
+    caption = "Time to sustained metabolic recovery per replicate well (NA = not reached within assay window)"
+  )
+```
+
+### Replicate-aware summary
+
+```{r recovery_summary}
+recovery_summary <- recovery_by_well %>%
+  summarise(
+    n_reached    = sum(!is.na(recovery_h)),
+    n_total      = n(),
+    recovery_mean = mean(recovery_h, na.rm = TRUE),
+    recovery_sd   = sd(recovery_h, na.rm = TRUE),
+    .by = c(condition, group, ab_conc)
+  ) %>%
+  arrange(group, ab_conc)
+
+recovery_summary %>%
+  mutate(across(where(is.numeric), ~round(., 2))) %>%
+  kable(
+    col.names = c("Condition", "Group", "AB (mg/L)", "n reached", "n total",
+                  "Recovery mean (h)", "Recovery SD (h)"),
+    caption = "Mean +/- SD time to metabolic recovery across replicate wells"
+  )
+```
+
+### Threshold sensitivity analysis
+
+> Recovery time recalculated at 5 uW and 20 uW (roughly half and double the
+> primary 10 uW threshold), and at 20% of the mean untreated-Bacteria peak
+> heat flow (a data-driven alternative to a fixed uW value), to check that
+> the qualitative ordering of conditions is not an artifact of the specific
+> threshold chosen.
+
+```{r recovery_sensitivity}
+bact_peak_uW <- heat_full %>% filter(condition == "Bacteria") %>%
+  summarise(peak = max(heat_flow_relative), .by = well) %>% pull(peak) %>% mean()
+
+sensitivity_thresholds <- tibble(
+  label     = c("5 uW", "10 uW (primary)", "20 uW", "20% of Bacteria peak"),
+  threshold = c(5, 10, 20, 0.20 * bact_peak_uW)
+)
+
+recovery_sensitivity <- sensitivity_thresholds %>%
+  mutate(
+    result = map(threshold, function(th) {
+      heat_full %>%
+        filter(condition != "Media ctrl") %>%
+        summarise(
+          recovery_h = time_to_recovery(time_h, heat_flow_relative, threshold = th),
+          .by = c(well, condition, group, ab_conc)
+        ) %>%
+        summarise(
+          n_reached     = sum(!is.na(recovery_h)),
+          recovery_mean = mean(recovery_h, na.rm = TRUE),
+          .by = condition
+        )
+    })
+  ) %>%
+  unnest(result)
+
+recovery_sensitivity %>%
+  mutate(display = if_else(n_reached == 0, "NR", as.character(round(recovery_mean, 2)))) %>%
+  select(label, condition, display) %>%
+  pivot_wider(names_from = label, values_from = display) %>%
+  kable(caption = "Mean recovery time (h) per condition, across threshold choices (NR = not reached)")
+```
+
+> At 5, 10 and 20% of Bacteria-peak, the ordering is consistent: Bacteria and
+> sub-MIC ATM-AVI recover first (~2-3h), Phage alone recovers next (~7-8h),
+> and all three Phage+AB combinations recover markedly later (~12-19h) and
+> stay well-separated from both monotherapy arms. **At the higher 20 uW
+> threshold, all three Phage+AB combinations become "not reached"** within
+> the assay window -- their plateau heat flow sits close to 20 uW (see
+> Plot 1), so a stricter recovery threshold is not just delayed for them but
+> unmet. This does not contradict the conclusion (if anything it strengthens
+> it: combination-treated cultures' metabolic activity does not just recover
+> late, it may not fully recover to a level comparable to monotherapy within
+> the recorded window) -- but it means "combination treatment delays
+> recovery" is threshold-robust in direction, while the specific numeric
+> recovery times (13.7-16.8h at 10 uW) are threshold-dependent, and should
+> be reported with that caveat rather than as fixed values.
+
+### Plot 5: Time to Recovery Comparison
+
+```{r plot_recovery, fig.height=5, fig.width=9}
+# Conditions with n_reached == 0 never sustained recovery within the
+# recorded assay window (right-censored, not a true event time). These are
+# shown as an open/hatched bar out to the last observed timepoint, not
+# dropped, so they remain visible on the plot rather than silently vanishing.
+assay_end_h <- max(heat_full$time_h, na.rm = TRUE)
+
+recovery_plot_df <- recovery_summary %>%
+  mutate(
+    censored  = n_reached == 0,
+    bar_value = if_else(censored, assay_end_h, recovery_mean),
+    condition = fct_reorder(condition, bar_value)
+  )
+
+p_recovery <- recovery_plot_df %>%
+  ggplot(aes(y = condition, x = bar_value, fill = group)) +
+  geom_col(aes(alpha = censored), width = 0.7, color = "grey30", linewidth = 0.3) +
+  geom_errorbar(data = ~filter(.x, !censored),
+                aes(xmin = recovery_mean - recovery_sd, xmax = recovery_mean + recovery_sd),
+                width = 0.3, linewidth = 0.4, color = "grey30") +
+  geom_text(aes(label = case_when(
+                  censored          ~ "not reached (censored)",
+                  n_reached < n_total ~ paste0(n_reached, "/", n_total, " reached"),
+                  TRUE ~ ""
+                )),
+            hjust = -0.05, size = 3, color = "grey30") +
+  scale_fill_manual(values = c(
+    "Bacteria"    = "#2C3E50", "Phage alone" = "#2980B9",
+    "AB only"     = "#E67E22", "Phage + AB"  = "#8E44AD"
+  )) +
+  scale_alpha_manual(values = c(`FALSE` = 0.85, `TRUE` = 0.25), guide = "none") +
+  scale_x_continuous(expand = expansion(mult = c(0.02, 0.25))) +
+  labs(x = "Time to sustained metabolic recovery (h)", y = NULL, fill = NULL) +
+  theme_tk +
+  theme(legend.position = "bottom")
+
+p_recovery
+```
+
+> Bars shown at reduced opacity (AB 8 mg/L in this batch) never reached
+> sustained recovery within the ~23h recorded assay window -- their bar
+> extends to the last observed timepoint as a right-censored value, not a
+> true recovery time, consistent with 8 mg/L being at or above this
+> isolate's known ATM-AVI MIC (see the antibiotic-only MIC confirmation
+> below).
+
+---
+
+## Net Integrated Heat Over Fixed Windows (secondary endpoint)
+
+> Net baseline-corrected integrated heat over two fixed windows, as a
+> secondary summary alongside time to recovery. Because `heat_full` already
+> excludes the pre-1h instrument startup transient (see Data Import), these
+> windows are **1-8h and 1-18h**, not 0-8h/0-18h -- labelled accordingly
+> below rather than as "0-8h"/"0-18h" as in an earlier draft of this
+> section. Integrated heat is not duration-independent (a longer window
+> mechanically accumulates more or less heat depending on the curve shape);
+> using the same fixed windows across conditions makes the numbers
+> comparable to each other, it does not remove the duration dependence
+> itself. Values can be slightly negative for a well that sits at or just
+> below its own baseline for the window (see Derived Metrics note) -- this
+> reflects residual baseline drift/noise, not negative biological heat
+> production, and negative values are reported as-is rather than truncated.
+
+```{r cumulative_heat}
+cumulative_heat <- heat_full %>%
+  filter(condition != "Media ctrl") %>%
+  reframe(
+    window_1_8h  = AUC(time_h[time_h <= 8] * 3600, heat_flow_relative[time_h <= 8], method = "trapezoid") * 1e-6,
+    window_1_18h = AUC(time_h[time_h <= 18] * 3600, heat_flow_relative[time_h <= 18], method = "trapezoid") * 1e-6,
+    .by = c(well, sample_name, condition, group, ab_conc, replicate)
+  ) %>%
+  summarise(
+    heat_1_8h_mean  = mean(window_1_8h),  heat_1_8h_sd  = sd(window_1_8h),
+    heat_1_18h_mean = mean(window_1_18h), heat_1_18h_sd = sd(window_1_18h),
+    .by = c(condition, group, ab_conc)
+  ) %>%
+  arrange(group, ab_conc)
+
+cumulative_heat %>%
+  mutate(across(where(is.numeric), ~round(., 3))) %>%
+  kable(
+    col.names = c("Condition", "Group", "AB (mg/L)", "1-8h net heat (J), mean", "1-8h SD",
+                  "1-18h net heat (J), mean", "1-18h SD"),
+    caption = "Net baseline-corrected integrated heat over 1-8h and 1-18h windows"
+  )
+```
+
+---
+
+## Descriptive Comparisons
+
+> **No inferential statistics (p-values) are computed on these data.** Every
+> "replicate" in this batch is a technical replicate well from a single
+> CalScreener experiment (one plate, one run) -- not an independent
+> biological experiment. Treating 2-3 technical wells as if they were
+> independent replicates and reporting a p-value from them would be
+> pseudoreplication: the test would understate uncertainty by ignoring that
+> all wells share the same culture, reagents, and run-level conditions.
+> Differences between conditions are instead reported descriptively, as
+> per-well values (Derived Metrics above) and means +/- SD (below), with
+> effect sizes (mean differences) left for the reader/manuscript text to
+> interpret in the context of a single-experiment dataset. A biologically
+> independent replicate experiment (a second plate/run on a different day)
+> would be required before any inferential claim of statistical significance
+> is warranted.
+
+```{r descriptive_comparisons}
+comparison_summary <- derived_summary %>%
+  select(condition, group, ab_conc, n, peak_mean, peak_sd, val4h_mean, val4h_sd,
+         AUC_mean, AUC_sd) %>%
+  arrange(group, ab_conc)
+
+comparison_summary %>%
+  mutate(across(where(is.numeric), ~round(., 3))) %>%
+  kable(
+    col.names = c("Condition", "Group", "AB (mg/L)", "n (technical wells)",
+                  "Peak (uW), mean", "Peak SD", "Value at 4h (uW), mean", "Value at 4h SD",
+                  "AUC (uW*h), mean", "AUC SD"),
+    caption = "Descriptive summary across technical replicate wells (no inferential tests)"
+  )
+```
+
+---
+
+## Antibiotic-Only MIC Confirmation (Tellapragada et al., CMI 2020 method)
+
+> A confirmatory check, not the principal endpoint, restricted to the
+> AB-only arm. An earlier version of this section used isolated 30-minute
+> total-heat ratios over the full ~23h window, which produced an incorrect
+> result: it classified 8 mg/L (this isolate's known broth-microdilution
+> ATM-AVI MIC) as growth-positive and 16 mg/L as growth-negative, i.e. an
+> IMC-derived MIC of 16 mg/L -- contradicting the expected 8 mg/L. The
+> problem was denominator instability in short, isolated 30-minute windows,
+> compounded by departing from the fixed-endpoint design the method was
+> validated on. This section now instead uses **net integrated heat through
+> a single fixed 18h endpoint** (following the method's fixed-duration
+> design more closely than isolated short intervals), compared to Bacteria,
+> with the same 20% relative-heat cutoff for growth-positive/negative.
+>
+> Because this batch has no 4 mg/L AB-only well, an exact MIC cannot be
+> pinpointed between whatever the lowest inhibited concentration turns out
+> to be and the next-lowest tested concentration below it -- the result is
+> reported as a **bound** (e.g. ">2 and <=8 mg/L" if 2 mg/L is
+> growth-positive and 8 mg/L is growth-negative), not as an exact MIC value,
+> consistent with the actual concentrations available
+> (https://doi.org/10.1016/j.cmi.2020.01.026 for the underlying method).
+
+```{r ab_mic_setup}
+mic_window_h <- 18  # fixed endpoint, per Tellapragada et al. 2020's fixed-duration design
+
+ab_mic_heat <- heat_full %>%
+  filter(group %in% c("Bacteria", "AB only"), time_h <= mic_window_h) %>%
+  summarise(
+    heat_J = AUC(time_h * 3600, heat_flow_relative, method = "trapezoid") * 1e-6,
+    .by = c(well, sample_name, condition, group, ab_conc, replicate)
+  ) %>%
+  summarise(heat_J_mean = mean(heat_J), .by = c(condition, group, ab_conc))
+
+bact_heat_18h <- ab_mic_heat %>% filter(condition == "Bacteria") %>% pull(heat_J_mean)
+
+ab_mic_call <- ab_mic_heat %>%
+  filter(condition != "Bacteria") %>%
+  mutate(
+    relative_heat_18h = heat_J_mean / bact_heat_18h,
+    call = if_else(relative_heat_18h > 0.20, "Growth (positive)", "Inhibited (negative)")
+  ) %>%
+  arrange(ab_conc)
+
+ab_mic_call %>%
+  mutate(across(where(is.numeric), ~round(., 3))) %>%
+  kable(col.names = c("Condition", "Group", "AB (mg/L)", "Net heat to 18h (J)",
+                       "Relative to Bacteria", "Call"),
+        caption = "AB-only growth/no-growth call vs. Bacteria, fixed 18h endpoint (20% cutoff)")
+```
+
+```{r ab_mic_value, echo=FALSE, results='asis'}
+tested_concs <- sort(ab_mic_call$ab_conc)
+inhibited <- ab_mic_call %>% filter(call == "Inhibited (negative)") %>% pull(ab_conc) %>% sort()
+positive  <- ab_mic_call %>% filter(call == "Growth (positive)") %>% pull(ab_conc) %>% sort()
+
+if (length(inhibited) > 0) {
+  lowest_inhibited <- min(inhibited)
+  below <- positive[positive < lowest_inhibited]
+  if (length(below) > 0) {
+    cat(glue::glue("**IMC inhibition threshold: >{max(below)} and <={lowest_inhibited} mg/L** ",
+                    "(no concentration between these two was tested in this batch, so this is a ",
+                    "bound, not an exact MIC).\n"))
+  } else {
+    cat(glue::glue("**IMC inhibition threshold: <={lowest_inhibited} mg/L** ",
+                    "(the lowest concentration tested was already growth-negative; the true ",
+                    "threshold may be lower than any concentration in this batch).\n"))
+  }
+} else {
+  cat("**No antibiotic-only concentration tested here was classified as growth-negative** -- no IMC inhibition threshold can be bounded from this batch.\n")
+}
+```
+
+---
+
 ## Manuscript Recommendation
 
 ```{r recommendation, echo=FALSE, results='asis'}
-ttp_bact   <- derived %>% filter(well == "B1") %>% pull(TTP_h)
-ttp_ab4    <- derived %>% filter(well == "B3") %>% pull(TTP_h)
-ttp_phage  <- derived %>% filter(well == "C1") %>% pull(TTP_h)
-ttp_combo  <- derived %>% filter(well == "C3") %>% pull(TTP_h)
-val_bact_4h  <- derived %>% filter(well == "B1") %>% pull(value_at_4h) %>% round(3)
-val_combo_4h <- derived %>% filter(well == "C3") %>% pull(value_at_4h) %>% round(3)
+rec_bact   <- recovery_summary %>% filter(condition == "Bacteria")
+rec_ab_lo  <- recovery_summary %>% filter(group == "AB only", ab_conc %in% c(0.5, 1, 2))
+rec_phage  <- recovery_summary %>% filter(condition == "Phage")
+rec_combo  <- recovery_summary %>% filter(group == "Phage + AB")
+
+fmt_range <- function(df) {
+  paste0(round(min(df$recovery_mean), 1), "-", round(max(df$recovery_mean), 1))
+}
 
 cat(glue::glue("
-**Key numbers for manuscript:**
+**Key numbers for manuscript (real CalScreener export, mean of three technical replicate wells from one experiment):**
 
-- Bacteria alone TTP: {round(ttp_bact,1)}h
-- AB 4 mg/L alone TTP: {round(ttp_ab4,1)}h
-- Phage alone TTP: {round(ttp_phage,1)}h  
-- **Phage + 4 mg/L TTP: {round(ttp_combo,1)}h** (transcriptomics condition)
-- Delay vs bacteria alone: +{round(ttp_combo - ttp_bact, 1)}h
-- Heat flow at 4h, bacteria: {val_bact_4h}
-- Heat flow at 4h, Phage+4mg/L: {val_combo_4h}
+- Bacteria alone: recovery at {round(rec_bact$recovery_mean,2)} +/- {round(rec_bact$recovery_sd,2)}h
+- Sub-MIC ATM-AVI alone (0.5-2 mg/L): recovery at {fmt_range(rec_ab_lo)}h
+- Phage alone: recovery at {round(rec_phage$recovery_mean,2)} +/- {round(rec_phage$recovery_sd,2)}h
+- **Phage + ATM-AVI combinations (0.5-2 mg/L): recovery at {fmt_range(rec_combo)}h**
+- IMC-based ATM-AVI inhibition threshold (AB only, fixed 18h endpoint): >2 and <=8 mg/L (a bound, not an exact MIC -- 4 mg/L untested in this batch)
 
-**Suggested figure for manuscript:** Plot C (transcriptomics condition in context)
-+ Plot B (faceted matched comparison) as a two-panel figure.
+**Suggested Results sentence:** Sub-MIC ATM-AVI-treated cultures reached
+sustained detectable metabolic activity after approximately
+{fmt_range(rec_ab_lo)}h, and phage-treated cultures after approximately
+{round(rec_phage$recovery_mean,1)}h. In contrast, phage-ATM-AVI combinations
+remained metabolically suppressed until approximately {fmt_range(rec_combo)}h,
+demonstrating a marked delay in metabolic recovery compared with either
+monotherapy. This ordering was robust to the choice of recovery threshold
+(sensitivity analysis, 5-20 uW and 20% of Bacteria peak), though the
+specific numeric recovery times are threshold-dependent and the combination
+arm did not reach a stricter 20 uW threshold within the recorded window.
 
-**Methods sentence:**
-*Heat flow curves were digitized from representative thermograms and used to 
-derive time to peak metabolic rate (TTP) and relative heat flow at the 
-transcriptomics harvest point (4h). Phage + 4 mg/L ATM-AVI (C3) showed a 
-{round(ttp_combo - ttp_bact, 1)}h delay in peak metabolic activity compared 
-to bacteria alone, with near-zero heat flow at 4h, supporting selection of 
-this timepoint for transcriptomic analysis.*
+**Suggested Methods sentence:** Baseline-corrected heat-flow curves were
+analysed for time to metabolic recovery, defined operationally as the first
+time heat flow exceeded 10 uW for at least 30 consecutive minutes. This is
+an operational threshold informed by, but not validated as a recovery
+criterion by, the stable-signal concept in the IMC framework of
+Tellapragada et al.; it was used here to quantify delayed metabolic
+recovery rather than to assign a conventional MIC, and its robustness was
+checked with a threshold sensitivity analysis.
+
+**Cautions:**
+
+- Call this 'metabolic suppression' or 'delayed metabolic recovery', not
+  killing -- IMC does not directly measure viability.
+- This batch's combination wells only reach 2 mg/L ATM-AVI, not 4 mg/L. Any
+  statement about a phage + 4 mg/L condition requires data from another run.
+- All replicate wells come from a single CalScreener experiment (technical,
+  not biological, replicates) -- no inferential statistics were computed;
+  a second independent experiment is needed before any claim of statistical
+  significance.
+- The IMC inhibition threshold above is a bound (>2 and <=8 mg/L), not an
+  exact MIC, and should be described that way rather than reported as
+  '8 mg/L' outright.
+
+**Suggested figure for manuscript:** Plot 1 (all curves overview) + Plot 2
+(faceted matched comparison) as a two-panel primary figure, with Plot 5
+(time to recovery) as the principal quantitative endpoint.
 "))
 ```
