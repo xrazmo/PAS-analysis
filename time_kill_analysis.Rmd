@@ -13,7 +13,9 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, dpi = 150)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, dpi = 150,
+                       dev = "cairo_pdf")
+Sys.setlocale("LC_ALL", "en_US.UTF-8")
 ```
 
 ## Libraries & Parameters
@@ -27,12 +29,13 @@ library(ggrepel)
 library(patchwork)
 library(rstatix)
 library(ggpubr)
+library(knitr)
 # ============================================================
 # USER PARAMETERS
 # ============================================================
-data_dir <- "../../time_kill_data/"
+data_dir <- "../time_kill_data/"
 # Input file
-input_file <- file.path(data_dir,"time_kill.csv")
+input_file <- file.path(data_dir,"time_kill_imputed.csv")
 
 # Initial inoculum at t=0 (CFU/mL)
 initial_inoculum <- 1e6
@@ -113,7 +116,7 @@ theme_tk <- theme_bw(base_size = 12) +
 
 ```{r data_prep}
 # Read data
-raw <- read.csv(input_file, stringsAsFactors = FALSE, check.names = FALSE)
+raw <- read.csv(input_file, stringsAsFactors = FALSE, check.names = FALSE, fileEncoding = "UTF-8-BOM")
 
 # Add t=0 (initial inoculum for each row)
 raw <- raw %>% mutate(`0h` = initial_inoculum)
@@ -272,7 +275,7 @@ p_combined <- p_ab / p_phage +
 
 p_combined
 
-ggsave("./figures/time_kill.pdf",width=10,height=7,device="pdf")
+ggsave("./figures/time_kill.pdf",width=10,height=7,device=cairo_pdf)
 ```
 
 ---
@@ -740,7 +743,7 @@ final_figure <- row1 / row2 +
   theme(plot.margin = margin(1, 1, 1, 1),
         axis.title.y.left = element_text(size = 10),plot.tag = element_text(size=11,face="bold"))
 
-ggsave("./figures/time_kill_combined2.png",width=10,height=13,device="png")
+ggsave("./figures/time_kill_combined2.png",width=10,height=13,device="png",type="cairo")
 
 ```
 

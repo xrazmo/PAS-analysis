@@ -670,19 +670,21 @@ fig_final
 ```
 
 ```{r save}
-ggsave("Figure_interaction_panels.pdf",
+if (!dir.exists("./figures")) dir.create("./figures", recursive = TRUE)
+
+ggsave("./figures/Figure_interaction_panels.pdf",
        fig_final, width = 14, height = 20,
        device = cairo_pdf)
 
-ggsave("Figure_interaction_panels.png",
+ggsave("./figures/Figure_interaction_panels.png",
        fig_final, width = 14, height = 20,
        dpi = 300)
 
 # Individual panels for journal submission flexibility
-ggsave("PanelA_model.pdf",     pA, width = 9,  height = 4.5, device = cairo_pdf)
-ggsave("PanelB_landscape.pdf", pB, width = 10, height = 6,   device = cairo_pdf)
-ggsave("PanelC_resistance.pdf",pC, width = 10, height = 7,   device = cairo_pdf)
-ggsave("PanelD_slopegraph.pdf",pD, width = 11, height = 7,   device = cairo_pdf)
+ggsave("./figures/PanelA_model.pdf",     pA, width = 9,  height = 4.5, device = cairo_pdf)
+ggsave("./figures/PanelB_landscape.pdf", pB, width = 10, height = 6,   device = cairo_pdf)
+ggsave("./figures/PanelC_resistance.pdf",pC, width = 10, height = 7,   device = cairo_pdf)
+ggsave("./figures/PanelD_slopegraph.pdf",pD, width = 11, height = 7,   device = cairo_pdf)
 
 message("All figures saved.")
 ```

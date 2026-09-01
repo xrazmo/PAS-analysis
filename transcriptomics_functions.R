@@ -233,7 +233,7 @@ run_lfcShrink <- function(dds,
   }
 
   if (!is.null(LFC) && !is.null(padj)) {
-    res <- res %>% filter(abs(log2FoldChange) > !!LFC & padj < !!padj)
+    res <- res %>% filter(abs(log2FoldChange) >= !!LFC & padj < !!padj)
   }
 
   if (!is.null(annotation)) {
@@ -272,7 +272,7 @@ plot_venn_diagram <- function(in_dir) {
 
   deg_list <- map(files, ~ {
     read_csv(.x, show_col_types = FALSE) %>%
-      filter(abs(log2FoldChange) > 1 & padj < 0.05) %>%
+      filter(abs(log2FoldChange) >= 1 & padj < 0.05) %>%
       pull(gene) %>%
       unique()
   })

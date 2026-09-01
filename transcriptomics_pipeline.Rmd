@@ -18,7 +18,7 @@ library(pheatmap)
 library(ggplot2)
 
 # Source custom functions
-source("transcriptomics_functions_v2.R")
+source("transcriptomics_functions.R")
 
 out_dir = "./export/"
 ```
@@ -43,6 +43,17 @@ keep_samples <- metadata %>% filter(ab_conc!=8) %>% pull(fname)
 metadata_filt <- metadata %>% filter(fname %in% keep_samples)
 counts_filt <- counts[,metadata_filt$fname]
 metadata_filt$ab_conc <- droplevels(metadata_filt$ab_conc)
+
+#Step 2b: exclude A38 (24h) -- QC outlier. PC1 of the 24h VST-PCA is >4x the
+#next most extreme sample, DESeq2-normalized library size (~2.9M) is roughly
+#half of every other 24h sample, and a single gene (EBHIBJHK_04971) makes up
+#11.7% of its library vs 3.6% average for other 24h samples. Raw mapping rate
+#is normal (86.5%, best in the 24h batch), so this is a compositional/expression
+#outlier, not a sequencing failure. Without exclusion, sva() partially fits this
+#one sample and produces 24h DEG calls (phage, interaction) that barely overlap
+#(Jaccard ~0.02-0.03) with the outlier-excluded model.
+metadata_filt <- metadata_filt %>% filter(fname != "A38")
+counts_filt <- counts_filt[, metadata_filt$fname]
 ```
 
 
@@ -87,9 +98,9 @@ run_gsea_base("./export/model_out","./export/kegg_gsea")
 
 ```{r}
 
-source("transcriptomics_functions_v2.R")
+source("transcriptomics_functions.R")
 gsea_all <- read.csv('./export/kegg_gsea/gsea_all_3_cat.csv')
-pathway_category <- read.csv('./export/kegg_gsea/pathway_category.csv')
+pathway_category <- read.csv('./export/kegg_gsea/pathway_category.csv', fileEncoding = "UTF-8-BOM")
 plot_pathway_dotplot(gsea_all,pathway_category) 
 
 
@@ -103,13 +114,13 @@ plot_pathway_dotplot(gsea_all,pathway_category)
 library(patchwork)
 library(ggplotify)
 
-source("transcriptomics_functions_v2.R")
+source("transcriptomics_functions.R")
 pvenn_res <- plot_venn_diagram('./export/model_out/')
 write.csv(pvenn_res$count,"./export/count_venn_diagram.csv")
 ppcoa_res <- plot_pcoa(counts_filt,metadata_filt)
 
 gsea_all <- read.csv('./export/kegg_gsea/gsea_all_3_cat.csv')
-pathway_category <- read.csv('./export/kegg_gsea/pathway_category.csv')
+pathway_category <- read.csv('./export/kegg_gsea/pathway_category.csv', fileEncoding = "UTF-8-BOM")
 pgsea <- plot_gsea_heatmap(gsea_all, pathway_category)
 
 ppcoa <- ppcoa_res$fig
@@ -188,7 +199,7 @@ message("Distance matrix successfully saved to 'pcoa_vst_mat_euclidean.tsv'")
 ## combo vs mono therapy
 ```{r}
 
-source("transcriptomics_functions_v2.R")
+source("transcriptomics_functions.R")
 df_response <- assess_interactions(in_dir="./export/model_out/",
                                   out_dir = "./export/interaction/",
                                    annotation = annotation)
@@ -907,8 +918,6 @@ ggsave("./figures/heatmap_atm_groups.pdf",ht_gg,device='pdf', width = 5,height =
 
 write.csv(sig_df[,c("gene_name","group",col_info$col_name[ordered_col])],"./export/__LFC_heatmap_data.csv")
 ```
-
-
 
 
 

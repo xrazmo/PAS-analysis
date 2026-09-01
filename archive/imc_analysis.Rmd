@@ -24,7 +24,7 @@ library(scales)
 # PARAMETERS
 # ============================================================
 
-imc_file <- "../../time_kill_data//heat.tsv"
+imc_file <- "../../time_kill_data/heat.tsv"
 
 # Shared theme (consistent with time-kill figures)
 theme_tk <- theme_bw(base_size = 12) +

@@ -518,8 +518,10 @@ fig1
 ```
 
 ```{r save-fig1}
-ggsave("Figure1_overview.pdf",  fig1, width = 14, height = 6,  device = "pdf")
-ggsave("Figure1_overview.png",  fig1, width = 14, height = 6,  dpi = 300)
+if (!dir.exists("./figures")) dir.create("./figures", recursive = TRUE)
+
+ggsave("./figures/Figure1_overview.pdf",  fig1, width = 14, height = 6,  device = "pdf")
+ggsave("./figures/Figure1_overview.png",  fig1, width = 14, height = 6,  dpi = 300)
 ```
 
 ## Figure 2: Interaction-defined gene details (C + D)
@@ -538,8 +540,8 @@ fig2
 ```
 
 ```{r save-fig2}
-ggsave("Figure2_interaction_clusters.pdf", fig2, width = 18, height = 11, device = "pdf")
-ggsave("Figure2_interaction_clusters.png", fig2, width = 18, height = 11, dpi = 300)
+ggsave("./figures/Figure2_interaction_clusters.pdf", fig2, width = 18, height = 11, device = "pdf")
+ggsave("./figures/Figure2_interaction_clusters.png", fig2, width = 18, height = 11, dpi = 300)
 ```
 
 ## Figure 3: Four-condition lollipop (E — standalone)
@@ -557,8 +559,8 @@ fig3
 ```
 
 ```{r save-fig3}
-ggsave("Figure3_lollipop.pdf", fig3, width = 13, height = 7, device = "pdf")
-ggsave("Figure3_lollipop.png", fig3, width = 13, height = 7, dpi = 300)
+ggsave("./figures/Figure3_lollipop.pdf", fig3, width = 13, height = 7, device = "pdf")
+ggsave("./figures/Figure3_lollipop.png", fig3, width = 13, height = 7, dpi = 300)
 ```
 
 ## Combined 5-panel figure (publication layout)
@@ -583,9 +585,9 @@ fig_combined
 ```
 
 ```{r save-combined}
-ggsave("Figure_combined.pdf", fig_combined,
+ggsave("./figures/Figure_combined.pdf", fig_combined,
        width = 18, height = 20, device = "pdf")
-ggsave("Figure_combined.png", fig_combined,
+ggsave("./figures/Figure_combined.png", fig_combined,
        width = 18, height = 20, dpi = 300)
 ```
 
