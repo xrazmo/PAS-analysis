@@ -449,7 +449,7 @@ p_synergy_bubble <- ggplot(
            fill = "#8E44AD", alpha = 0.06,
            color = "#8E44AD", linetype = "dashed") +
   annotate("text", x = 2.5, y = 5.5,
-           label = "Peak synergy (4h ≈ 6h, Dunn p < 0.001)",
+           label = "Peak synergy (4h & 6h; both differ from 24h, Dunn p.adj < 0.05)",
            size = 3, color = "black", fontface = "bold") +
 
   geom_point(aes(size = abs(delta), fill = delta),
@@ -506,14 +506,27 @@ timepoint_df <- long %>%
     group_type    = ifelse(phage == "Phage", "Phage + AB", "AB Only"),
     log_reduction = log10(initial_inoculum) - log_cfu
   )
+
+# _1/_2/_3 in sample_id are technical replicates of a single biological
+# culture per (antibiotic concentration x phage x time) -- not independent
+# biological replicates. Averaging them first gives one value per
+# concentration (n=4: 0.5/1/2/4 mg/L), which is the true biological n for
+# any inferential test below; testing on the raw technical replicates would
+# pseudoreplicate (n=12 instead of n=4) and understate the real variability.
+timepoint_df_biol <- timepoint_df %>%
+  group_by(time, antibiotic, group_type) %>%
+  summarise(log_reduction = mean(log_reduction, na.rm = TRUE), .groups = "drop")
 ```
 
-### Test 1: Wilcoxon Test at Each Timepoint per Concentration
+### Test 1: Wilcoxon Test at Each Timepoint Across Concentrations
 
-> Tests whether phage+AB reduces CFU significantly vs AB alone at each hour.
+> Tests whether phage+AB reduces CFU significantly vs AB alone at each hour,
+> using one averaged value per antibiotic concentration (n=4 biological
+> replicates per arm: 0.5, 1, 2, 4 mg/L) rather than the three technical
+> replicates per concentration.
 
 ```{r stats_wilcoxon}
-wilcox_by_time <- timepoint_df %>%
+wilcox_by_time <- timepoint_df_biol %>%
   group_by(time) %>%
   group_modify(~ {
     x <- .x %>% filter(group_type == "Phage + AB") %>% pull(log_reduction)
@@ -559,7 +572,7 @@ wilcox_by_time %>%
                   "Mean log-red (Phage+AB)", "Mean log-red (AB Only)",
                   "Δlog₁₀", "W", "p-value", "p-adj (BH)", "Sig.",
                   "Interpretation"),
-    caption = "Phage+AB vs AB alone at each timepoint (pooled across concentrations)"
+    caption = "Phage+AB vs AB alone at each timepoint (n=4 antibiotic concentrations per arm, technical replicates averaged first)"
   )
 
 write_tsv(wilcox_by_time,"./export/wilcox_by_time_pooled_concentrations.tsv")
@@ -576,13 +589,13 @@ write_tsv(wilcox_by_time,"./export/wilcox_by_time_pooled_concentrations.tsv")
 # TEST 2: Kruskal-Wallis — does synergy differ across timepoints?
 # ============================================================
 
-# Calculate delta per matched pair (same antibiotic + replicate number)
-delta_by_time <- timepoint_df %>%
-  # Extract replicate number from sample_id
-  mutate(rep = str_extract(sample_id, "_[0-9]+$") %>% str_remove("_")) %>%
-  group_by(time, antibiotic, rep, group_type) %>%
-  summarise(mean_red = mean(log_reduction, na.rm = TRUE), .groups = "drop") %>%
-  pivot_wider(names_from = group_type, values_from = mean_red) %>%
+# Calculate delta per matched pair (same antibiotic concentration, at a given
+# time). Paired on concentration, not on the _1/_2/_3 technical-replicate
+# index -- those are repeated measurements of one biological culture per
+# concentration, not independent biological replicates (see
+# timepoint_df_biol above), so pairing on them would pseudoreplicate.
+delta_by_time <- timepoint_df_biol %>%
+  pivot_wider(names_from = group_type, values_from = log_reduction) %>%
   mutate(delta = `Phage + AB` - `AB Only`) %>%
   filter(!is.na(delta))
 
@@ -642,14 +655,26 @@ delta_summary <- delta_by_time %>%
     .groups    = "drop"
   )
 
-# Compact letter display from Dunn results
-# Groups: 2h=a, 4h&6h=b (not different), 10h&24h=a
-cld_labels <- tibble(
-  time       = c(2,    4,    6,    10,   24),
-  cld        = c("a",  "b",  "b",  "a",  "a"),   # same letter = not significantly different
-  y_pos      = delta_summary$mean_delta +
-               delta_summary$se_delta + 0.4
-)
+# Significance brackets from the actual Dunn post-hoc results (dunn_time).
+# A single-letter compact-letter-display can't represent this pattern: 24h
+# differs significantly from 4h and 6h (p.adj<0.05) but not from 2h or 10h,
+# while 2h/4h/6h/10h don't differ from each other -- that's not reducible to
+# disjoint letter groups, so draw brackets only over the pairs that are
+# actually significant instead of a letter per timepoint.
+sig_pairs <- dunn_time %>%
+  filter(p.adj < 0.05) %>%
+  mutate(
+    x1 = as.numeric(factor(as.character(group1), levels = c(2, 4, 6, 10, 24))),
+    x2 = as.numeric(factor(as.character(group2), levels = c(2, 4, 6, 10, 24)))
+  ) %>%
+  rowwise() %>%
+  mutate(
+    y = max(delta_summary$mean_delta[delta_summary$time %in% c(as.numeric(group1), as.numeric(group2))] +
+            delta_summary$se_delta[delta_summary$time %in% c(as.numeric(group1), as.numeric(group2))]) + 0.4
+  ) %>%
+  ungroup() %>%
+  arrange(x1) %>%
+  mutate(y = y + (row_number() - 1) * 0.5)  # stagger overlapping brackets vertically
 
 # Phase annotations
 phases <- tibble(
@@ -711,9 +736,12 @@ p_timepoint_synergy <- ggplot(delta_summary, aes(x = factor(time), y = mean_delt
                                 "FALSE" = "#AAB7B8"),
                     guide = "none") +
 
-  # Compact letter display (CLD)
-  geom_text(data = cld_labels,
-            aes(x = factor(time), y = y_pos, label = cld),
+  # Significance brackets (Dunn post-hoc, p.adj < 0.05 pairs only)
+  geom_segment(data = sig_pairs,
+               aes(x = x1, xend = x2, y = y, yend = y),
+               inherit.aes = FALSE, linewidth = 0.5, color = "black") +
+  geom_text(data = sig_pairs,
+            aes(x = (x1 + x2) / 2, y = y + 0.15, label = p.adj.signif),
             size = 4.5, fontface = "bold", color = "black",
             inherit.aes = FALSE) +
 
