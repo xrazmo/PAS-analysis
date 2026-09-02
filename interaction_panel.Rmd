@@ -158,7 +158,7 @@ p_scatter <- ggplot(scatter_df,
     #title    = "B  Interaction coefficient vs antibiotic effect (4 h)",
     #subtitle = "Red points: interaction-defined genes  |  shaded: resensitization quadrants",
     x        = expression("Antibiotic LFC (log"[2]*"FC)"),
-    y        = expression("Interaction coefficient (\u0394log"[2]*"FC)")
+    y        = expression("Interaction coefficient ("*Delta*"log"[2]*"FC)")
   ) +
   theme_bw(base_size = 11) +
   theme(
@@ -184,13 +184,13 @@ genes across four functional clusters.
 single-coefficient estimates; `lfc_combo` is a separately ashr-shrunken
 contrast; `lfc_interaction` is a separately ashr-shrunken interaction
 coefficient. Because shrinkage is nonlinear and applied independently to each
-quantity, `lfc_phage + lfc_ab` ("expected additive" below) is a *descriptive*
-reference line, not an algebraically exact stand-in for the additive-null
-model — the visual gap (`lfc_combo - (lfc_phage + lfc_ab)`) can differ
-appreciably from the model's actual `lfc_interaction` (e.g. by ~0.6-0.7
-log2FC for torA/torD). The plot therefore also annotates each gene with its
-true shrunken interaction coefficient so the exact value is visible
-alongside the descriptive visual gap.
+quantity, `lfc_phage + lfc_ab` ("Sum*" below) is a *descriptive* reference
+point, not an algebraically exact stand-in for the additive-null model — the
+visual gap (`lfc_combo - (lfc_phage + lfc_ab)`) can differ appreciably from
+the model's actual `lfc_interaction` (e.g. by ~0.6-0.7 log2FC for
+torA/torD). The plot itself carries no in-figure footnote (per journal
+figure format); this caveat, and the per-gene `lfc_interaction` values in
+`pD_df`/`pD_wide` below, belong in the external figure caption/legend text.
 
 ```{r panel-D-data}
 focal_genes <- tribble(
@@ -348,13 +348,14 @@ p_line <- ggplot() +
     size = 2.5, shape = 21,alpha=0.8
   ) +
 
-  # ── Gene labels at observed combination, annotated with the true
-  #    (separately-shrunken) interaction coefficient -- the exact effect
-  #    size, as distinct from the descriptive visual gap plotted above ──────
+  # ── Gene labels at observed combination. NOTE: the sum-of-shrunken-estimates
+  #    point/segment above is a descriptive reference, not the exact
+  #    additive-null model -- see figure caption/legend text for the true
+  #    (separately-shrunken) interaction coefficient per gene. ─────────────
   geom_text_repel(
     data = pD_wide,
     aes(x = 4, y = lfc_combo,
-        label = sprintf("%s (int.=%.2f)", gene, lfc_interaction), colour = cluster),
+        label = gene, colour = cluster),
     size           = 4,
     fontface       = "italic",
     nudge_x        = 0.15,
@@ -372,14 +373,13 @@ p_line <- ggplot() +
 
   scale_x_continuous(
     breaks = 1:4,
-    labels = c("Phage", "Antibiotic", "Sum of shrunken\nestimates*", "Observed\ncombination"),
+    labels = c("Phage", "Antibiotic", "Sum*", "Combination"),
     limits = c(0.7, 5.0)
   ) +
 
   labs(
     x = NULL,
-    y = expression(log[2]~"fold change"),
-    caption = "*Sum of two separately shrunken estimates; a descriptive reference, not the exact additive-null model.\nGene labels show the true (separately shrunken) interaction coefficient (int.)."
+    y = expression(log[2]~"fold change")
   ) +
 
   theme_bw() +
@@ -388,8 +388,7 @@ p_line <- ggplot() +
     strip.text         = element_text(size = 8.5, face = "bold"),
     axis.text.x        = element_text(size = 8),
     strip.background = element_blank(),
-    legend.position = "none",
-    plot.caption       = element_text(size = 7, colour = "grey40", hjust = 0)
+    legend.position = "none"
   )
 
 p_line
