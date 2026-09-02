@@ -237,7 +237,12 @@ run_lfcShrink <- function(dds,
   }
 
   if (!is.null(annotation)) {
-    res <- res %>% merge(annotation, by.x = "gene", by.y = "ID", all.x = TRUE)
+    # FIX-5.1: annotation$ID is not unique (multi-mapped loci, e.g. paralogous
+    # IS-element copies collapsed to one assembly locus) — a plain merge fans
+    # out matching genes into multiple rows. Keep the first annotation row per
+    # ID so each gene stays a single row.
+    annotation_dedup <- annotation %>% filter(!is.na(ID)) %>% distinct(ID, .keep_all = TRUE)
+    res <- res %>% merge(annotation_dedup, by.x = "gene", by.y = "ID", all.x = TRUE)
   }
 
   if (!is.null(out_file)) {
@@ -913,6 +918,8 @@ plot_pathway_dotplot <- function(gsea_all, category_sort = NULL) {
 #           BOTH phage and antibiotic without a significant interaction term.
 #           These previously fell silently into "No significant change".
 # FIX-3.4  f_combo included in file-existence check
+# FIX-5.1  annotation deduplicated by ID before the join (see run_lfcShrink)
+#           so response-class summaries count genes, not annotation rows.
 # ─────────────────────────────────────────────────────────────────────────────
 assess_interactions <- function(
     in_dir,
@@ -926,6 +933,8 @@ assess_interactions <- function(
   if (!is.data.frame(annotation) || !"ID" %in% colnames(annotation)) {
     stop("annotation must be a data frame with column 'ID'")
   }
+
+  annotation <- annotation %>% filter(!is.na(ID)) %>% distinct(ID, .keep_all = TRUE)
 
   # Helper: robust gene-column extraction
   standardize_gene_col <- function(df) {

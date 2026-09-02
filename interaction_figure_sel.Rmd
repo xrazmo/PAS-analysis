@@ -174,10 +174,23 @@ p_scatter
 ```
 
 
-# Panel D — Slope graph: observed vs expected additive for focal genes
+# Panel D — Slope graph: observed vs. sum-of-shrunken-effects for focal genes
 
-Shows the gap between expected additive and observed combination for the
-most mechanistically important genes across four functional clusters.
+Shows the observed combination LFC against the sum of the separately
+shrunken phage and antibiotic LFCs, for the most mechanistically important
+genes across four functional clusters.
+
+**Note on interpretation**: `lfc_phage` and `lfc_ab` are each apeglm-shrunken
+single-coefficient estimates; `lfc_combo` is a separately ashr-shrunken
+contrast; `lfc_interaction` is a separately ashr-shrunken interaction
+coefficient. Because shrinkage is nonlinear and applied independently to each
+quantity, `lfc_phage + lfc_ab` ("expected additive" below) is a *descriptive*
+reference line, not an algebraically exact stand-in for the additive-null
+model — the visual gap (`lfc_combo - (lfc_phage + lfc_ab)`) can differ
+appreciably from the model's actual `lfc_interaction` (e.g. by ~0.6-0.7
+log2FC for torA/torD). The plot therefore also annotates each gene with its
+true shrunken interaction coefficient so the exact value is visible
+alongside the descriptive visual gap.
 
 ```{r panel-D-data}
 focal_genes <- tribble(
@@ -235,34 +248,37 @@ pD_df <- df4 %>%
   distinct(gene.y, .keep_all = TRUE) %>%
   select(gene = gene.y,
          lfc_phage, lfc_ab, lfc_combo, lfc_interaction) %>%
-  mutate(lfc_expected = lfc_phage + lfc_ab) %>%
+  # NOTE: sum of two separately-shrunken estimates, NOT an exact additive-null
+  # model (shrinkage is nonlinear/independent per coefficient) -- descriptive
+  # reference only. See note above; true interaction effect is lfc_interaction.
+  mutate(lfc_sum_shrunken = lfc_phage + lfc_ab) %>%
   left_join(focal_genes, by = "gene") %>%
   mutate(
     cluster = factor(cluster, levels = unique(focal_genes$cluster)),
     gene    = factor(gene,    levels = rev(unique(focal_genes$gene)))
   )
 
-# Long for slope: three x positions — Phage, Antibiotic, Expected, Observed
+# Long for slope: three x positions — Phage, Antibiotic, Sum-of-shrunken, Observed
 pD_long <- pD_df %>%
-  select(gene, cluster, lfc_phage, lfc_ab, lfc_expected, lfc_combo) %>%
+  select(gene, cluster, lfc_phage, lfc_ab, lfc_sum_shrunken, lfc_combo) %>%
   pivot_longer(
-    cols      = c(lfc_phage, lfc_ab, lfc_expected, lfc_combo),
+    cols      = c(lfc_phage, lfc_ab, lfc_sum_shrunken, lfc_combo),
     names_to  = "condition",
     values_to = "lfc"
   ) %>%
   mutate(
     condition = factor(condition,
-                       levels = c("lfc_phage","lfc_ab","lfc_expected","lfc_combo"),
+                       levels = c("lfc_phage","lfc_ab","lfc_sum_shrunken","lfc_combo"),
                        labels = c("Phage","Antibiotic",
-                                  "Expected\nadditive","Observed\ncombination")),
-    line_type = ifelse(condition %in% c("Expected\nadditive","Observed\ncombination"),
+                                  "Sum of shrunken\nestimates (descriptive)","Observed\ncombination")),
+    line_type = ifelse(condition %in% c("Sum of shrunken\nestimates (descriptive)","Observed\ncombination"),
                        "focal", "mono")
   )
 ```
 
 ```{r panel-D-plot}
 # ── Wide format needed for manual segments ───────────────────────────────────
-pD_wide <- pD_df  # already has lfc_phage, lfc_ab, lfc_expected, lfc_combo, cluster, gene
+pD_wide <- pD_df  # already has lfc_phage, lfc_ab, lfc_sum_shrunken, lfc_combo, cluster, gene
 
 p_line <- ggplot() +
 
@@ -278,11 +294,11 @@ p_line <- ggplot() +
     linewidth = 0.6, alpha = 0.75, linetype = "solid"
   ) +
 
-  # ── Segment 2: Antibiotic → Expected additive (dotted) ─────────────────────
+  # ── Segment 2: Antibiotic → Sum of shrunken estimates (dotted, descriptive) ─
   geom_segment(
     data = pD_wide,
     aes(x = 2, xend = 3,
-        y = lfc_ab, yend = lfc_expected,
+        y = lfc_ab, yend = lfc_sum_shrunken,
         colour = "black", group = gene),
     linewidth = 0.6, alpha = 0.75, linetype = "dashed"
   ) +
@@ -296,11 +312,12 @@ p_line <- ggplot() +
     linewidth = 0.6, alpha = 0.75, linetype = "solid"
   ) +
 
-  # ── Gap shading between Expected and Observed at x = 4 ─────────────────────
+  # ── Visual gap shading (descriptive only -- not equal to lfc_interaction,
+  #    see note above) between sum-of-shrunken-estimates and Observed at x=4 ──
   geom_segment(
     data = pD_wide,
     aes(x = 4, xend = 4,
-        y = lfc_expected, yend = lfc_combo,
+        y = lfc_sum_shrunken, yend = lfc_combo,
         colour = cluster, group = gene),
     linewidth = 2.5, alpha = 0.2
   ) +
@@ -318,10 +335,10 @@ p_line <- ggplot() +
     aes(x = 2, y = lfc_ab, fill = cond_colours["ab"]),
     size = 2.5, shape = 21,alpha=0.8
   ) +
-  # Expected additive
+  # Sum of shrunken estimates (descriptive reference, not the exact additive null)
   geom_point(
     data = pD_wide,
-    aes(x = 3, y = lfc_expected, colour = "gray40"),
+    aes(x = 3, y = lfc_sum_shrunken, colour = "gray40"),
     size = 1, shape = 8, stroke = 1.0
   ) +
   # Observed combination
@@ -331,11 +348,13 @@ p_line <- ggplot() +
     size = 2.5, shape = 21,alpha=0.8
   ) +
 
-  # ── Gene labels at observed combination ─────────────────────────────────────
+  # ── Gene labels at observed combination, annotated with the true
+  #    (separately-shrunken) interaction coefficient -- the exact effect
+  #    size, as distinct from the descriptive visual gap plotted above ──────
   geom_text_repel(
     data = pD_wide,
     aes(x = 4, y = lfc_combo,
-        label = gene, colour = cluster),
+        label = sprintf("%s (int.=%.2f)", gene, lfc_interaction), colour = cluster),
     size           = 4,
     fontface       = "italic",
     nudge_x        = 0.15,
@@ -353,13 +372,14 @@ p_line <- ggplot() +
 
   scale_x_continuous(
     breaks = 1:4,
-    labels = c("Phage", "Antibiotic", "Expected\nadditive", "Observed\ncombination"),
+    labels = c("Phage", "Antibiotic", "Sum of shrunken\nestimates*", "Observed\ncombination"),
     limits = c(0.7, 5.0)
   ) +
 
   labs(
     x = NULL,
-    y = expression(log[2]~"fold change")
+    y = expression(log[2]~"fold change"),
+    caption = "*Sum of two separately shrunken estimates; a descriptive reference, not the exact additive-null model.\nGene labels show the true (separately shrunken) interaction coefficient (int.)."
   ) +
 
   theme_bw() +
@@ -368,7 +388,8 @@ p_line <- ggplot() +
     strip.text         = element_text(size = 8.5, face = "bold"),
     axis.text.x        = element_text(size = 8),
     strip.background = element_blank(),
-    legend.position = "none"
+    legend.position = "none",
+    plot.caption       = element_text(size = 7, colour = "grey40", hjust = 0)
   )
 
 p_line
@@ -379,7 +400,7 @@ p_line
 Shows phage / antibiotic / combo / interaction LFC for the key
 resensitization-relevant gene sets discussed in the paper.
 
-```{r panel-D-data}
+```{r panel-heatmap-data}
 # Define focal gene sets with their narrative cluster label
 focal <- tribble(
   ~gene_name,  ~cluster,
@@ -560,7 +581,7 @@ heat_df <- df4 %>%
   )
 ```
 
-```{r panel-D-plot}
+```{r panel-heatmap-plot}
 lfc_limit <- 8
 
 p_heat <- ggplot(heat_df,
@@ -628,6 +649,11 @@ p_heat
   plot_annotation(tag_levels = list(c("A","C","B")))
 
 ggsave("./figures/interaction_panel.pdf",width=12,height = 13,device="pdf")
-ggsave("./figures/interaction_panel.png",width=12,height = 13,device="png",dpi=300)
+
+# JPEG copy (300 dpi, DPI metadata embedded) replaces the PNG for journal submission
+magick::image_write(
+  magick::image_read_pdf("./figures/interaction_panel.pdf", density = 300),
+  path = "./figures/interaction_panel.jpg", format = "jpg", quality = 95, density = "300x300"
+)
 ```
 
