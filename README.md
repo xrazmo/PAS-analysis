@@ -19,7 +19,7 @@ isothermal microcalorimetry (IMC), and phage host-range assays.
 | Script | Produces | Reads |
 |---|---|---|
 | `transcriptomics_pipeline.Rmd` | DEG calling (DESeq2+SVA), KEGG GSEA, PCoA/Venn, response-class sankey, PERMANOVA, ATM-group heatmap | `data/count_data_all.csv`, `data/metadata_ecphage.xlsx`, `data/22ET500456__with-ecolik12.csv` |
-| `interaction_figure_sel.Rmd` | Figure 4 (interaction scatter, focal-gene slope graph, four-condition LFC heatmap) | `export/interaction/combo_therapy_responses.csv` (produced by `transcriptomics_pipeline.Rmd`) |
+| `interaction_panel.Rmd` | Figure 4 (interaction scatter, focal-gene slope graph, four-condition LFC heatmap) | `export/interaction/combo_therapy_responses.csv` (produced by `transcriptomics_pipeline.Rmd`) |
 | `time_kill_analysis.Rmd` | Time-kill curve figures | `data/time_kill_data/time_kill_imputed.csv` |
 | `imc_heat_flow.Rmd` | IMC heat-flow curve figures | `data/calscreener/expriments_PAS_well_metadata.csv` + CalScreener export |
 | `phage_bacteria_heatmap.Rmd` | Phage host-range heatmap | `../../time_kill_data/phage_bacteria.tsv`, `summary_isolates.csv` |
@@ -61,9 +61,9 @@ open the repo as your R working directory (or an RStudio project) before
 knitting.
 
 1. `transcriptomics_pipeline.Rmd` — run first; produces the DEG tables in
-   `export/model_out/` and `export/interaction/` that `interaction_figure_sel.Rmd`
+   `export/model_out/` and `export/interaction/` that `interaction_panel.Rmd`
    and its own figures depend on.
-2. `interaction_figure_sel.Rmd` — run after step 1; reads
+2. `interaction_panel.Rmd` — run after step 1; reads
    `export/interaction/combo_therapy_responses.csv`.
 3. `time_kill_analysis.Rmd`, `imc_heat_flow.Rmd`, `phage_bacteria_heatmap.Rmd`
    — independent of the transcriptomics pipeline and of each other; run any
@@ -86,7 +86,7 @@ journal submission (`.jpg` replaces the earlier `.png`):
 - `pcoa_venn_heatmap.pdf` / `.jpg` — PCoA, DEG Venn diagram, KEGG GSEA heatmap
 - `response_classes_sankey.pdf` / `.jpg` — gene response-class transitions across 1h→4h→24h
 - `interaction_panel.pdf` / `.jpg` — Figure 4: interaction scatter, focal-gene
-  slope graph, four-condition LFC heatmap (`interaction_figure_sel.Rmd`)
+  slope graph, four-condition LFC heatmap (`interaction_panel.Rmd`)
 - `phage_bacteria_heatmap.pdf` / `.jpg` — phage host-range heatmap
 - `heat_flow.pdf` / `.jpg` — IMC heat-flow curves
 - `time_kill_combined2.jpg` — time-kill curves (no PDF source)
