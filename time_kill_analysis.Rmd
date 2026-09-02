@@ -442,14 +442,17 @@ p_synergy_bubble <- ggplot(
   synergy_bubble_df,
   aes(x = factor(time), y = factor(antibiotic))
 ) +
-  # Significance border on peak timepoints
+  # Peak window highlighted across all 4 concentrations; the consistency of
+  # the jump at 4h/6h across every concentration row is the visual evidence
+  # for the peak (see Friedman test, chi-sq=13.4, df=4, p=0.0095, in the
+  # panel below) -- no pairwise timepoint comparison is claimed here.
   annotate("rect",
            xmin = 1.5, xmax = 3.4,
            ymin = 0.5, ymax = 5.4,
            fill = "#8E44AD", alpha = 0.06,
            color = "#8E44AD", linetype = "dashed") +
   annotate("text", x = 2.5, y = 5.5,
-           label = "Peak synergy (4h & 6h; both differ from 24h, Dunn p.adj < 0.05)",
+           label = "Peak combination benefit (4h & 6h), consistent across all concentrations",
            size = 3, color = "black", fontface = "bold") +
 
   geom_point(aes(size = abs(delta), fill = delta),
@@ -461,10 +464,10 @@ p_synergy_bubble <- ggplot(
 
   scale_fill_gradient2(
     low      = "#3498DB",    # Blue = phage worse (antagonism)
-    mid      = "#ECF0F1",    # White = no synergy
-    high     = "#E74C3C",    # Red = strong synergy
+    mid      = "#ECF0F1",    # White = no combination benefit
+    high     = "#E74C3C",    # Red = strong combination benefit
     midpoint = 0,
-    name     = "Δlog₁₀\n(synergy)",
+    name     = "Δlog₁₀\n(combination\nbenefit)",
     limits   = c(-3, 6)
   ) +
   scale_color_manual(values = c("TRUE"  = "white",
@@ -483,8 +486,9 @@ p_synergy_bubble <- ggplot(
   ) +
   theme_tk +
   theme(plot.tag = element_text(face = "bold", size = 12),
-        plot.margins = c(5,5,5,5),
-        legend.position=c(0.96,0.6),
+        plot.margin = margin(5, 25, 5, 5),
+        legend.position = "right",
+        legend.title = element_text(size = 9),
         legend.background = element_blank())
 
 p_synergy_bubble 
@@ -555,9 +559,9 @@ wilcox_by_time <- timepoint_df_biol %>%
   mutate(
     time_label     = paste0(time, "h"),
     interpretation = case_when(
-      delta_log >= 2  ~ "Strong synergy",
-      delta_log >= 1  ~ "Moderate synergy",
-      delta_log >= 0  ~ "Mild synergy",
+      delta_log >= 2  ~ "Strong combination benefit",
+      delta_log >= 1  ~ "Moderate combination benefit",
+      delta_log >= 0  ~ "Mild combination benefit",
       TRUE            ~ "Antagonism"
     )
   ) %>%
@@ -580,63 +584,61 @@ write_tsv(wilcox_by_time,"./export/wilcox_by_time_pooled_concentrations.tsv")
 
 ---
 
-### Test 2: Effect Size (Cohen's d)
+### Test 2: Friedman Test — does the combination-benefit trajectory vary across time?
 
-> Quantifies HOW MUCH phage reduces CFU, not just whether the difference is significant.
+> Tests whether Δlog₁₀ (phage+AB minus AB alone) follows a non-random pattern
+> across the five timepoints, using antibiotic concentration as a repeated-
+> measures block (each of the 4 concentrations contributes one Δlog₁₀ value
+> per timepoint, so every concentration is its own block across time). This
+> replaces a prior unpaired Kruskal-Wallis/Dunn-across-time approach, which
+> ignored the concentration pairing and, combined with the pairwise Dunn
+> post-hoc split across 10 comparisons, had essentially no power to resolve
+> individual timepoint-vs-timepoint differences at n=4 concentrations (the
+> smallest achievable two-sided exact p-value at n=4 is 0.125). The Friedman
+> test uses one omnibus statistic across all five timepoints at once and
+> correctly reflects the paired-by-concentration design, so it is better
+> powered than the pairwise alternative for asking whether the trajectory
+> shape is real. It still cannot say which specific timepoints differ; that
+> is reported descriptively from the observed means instead (see plot below).
 
-```{r stats_effectsize}
+```{r stats_friedman}
 # ============================================================
-# TEST 2: Kruskal-Wallis — does synergy differ across timepoints?
+# TEST 2: Friedman test -- does the combination-benefit trajectory
+# vary non-randomly across timepoints, blocked by concentration?
 # ============================================================
 
-# Calculate delta per matched pair (same antibiotic concentration, at a given
-# time). Paired on concentration, not on the _1/_2/_3 technical-replicate
-# index -- those are repeated measurements of one biological culture per
+# Delta per matched pair (same antibiotic concentration, at a given time).
+# Paired on concentration, not on the _1/_2/_3 technical-replicate index --
+# those are repeated measurements of one biological culture per
 # concentration, not independent biological replicates (see
 # timepoint_df_biol above), so pairing on them would pseudoreplicate.
 delta_by_time <- timepoint_df_biol %>%
   pivot_wider(names_from = group_type, values_from = log_reduction) %>%
   mutate(delta = `Phage + AB` - `AB Only`) %>%
-  filter(!is.na(delta))
-
-delta_by_time <- delta_by_time %>%
+  filter(!is.na(delta)) %>%
   mutate(time_f = factor(time))
 
-# Check before running Kruskal
-cat("Rows in delta_by_time:", nrow(delta_by_time), "\n")
-cat("Timepoints present:", unique(delta_by_time$time), "\n")
-cat("Groups per timepoint:\n")
-print(table(delta_by_time$time))
+friedman_mat <- delta_by_time %>%
+  select(antibiotic, time, delta) %>%
+  pivot_wider(names_from = time, values_from = delta) %>%
+  arrange(antibiotic)
 
-# Only run if more than one timepoint has data
-if (n_distinct(delta_by_time$time) > 1 &
-    nrow(delta_by_time) > n_distinct(delta_by_time$time)) {
+cat("Blocks (antibiotic concentrations):", nrow(friedman_mat), "\n")
+cat("Timepoints:", ncol(friedman_mat) - 1, "\n")
+print(friedman_mat)
 
-  kw_time <- kruskal_test(delta_by_time, delta ~ time_f)
-  cat("Kruskal-Wallis: H =", round(kw_time$statistic, 3),
-      "| df =", kw_time$df,
-      "| p =",  round(kw_time$p, 4), "\n")
+friedman_time <- friedman.test(as.matrix(friedman_mat[, -1]))
+cat("\nFriedman test: chi-squared =", round(friedman_time$statistic, 3),
+    "| df =", friedman_time$parameter,
+    "| p =",  signif(friedman_time$p.value, 3), "\n")
 
-  dunn_time <- dunn_test(delta_by_time, delta ~ time_f,
-                         p.adjust.method = "BH") %>%
-    add_significance() %>%
-    select(group1, group2, statistic, p, p.adj, p.adj.signif) %>%
-    arrange(p.adj)
-
-  dunn_time %>%
-    kable(
-      digits    = 3,
-      col.names = c("Time 1", "Time 2", "Z", "p", "p-adj", "Sig."),
-      caption   = "Dunn post-hoc: which timepoints differ in synergy magnitude?"
-    )
-
-} else {
-  cat("⚠ Not enough matched pairs for Kruskal-Wallis.\n")
-  cat("  Check that both Phage+AB and AB Only exist at each timepoint.\n")
-  print(delta_by_time)
-}
-
-write_tsv(dunn_time,"./export/dunn_post_hoc_synergy_mag.tsv")
+friedman_summary <- tibble(
+  statistic = as.numeric(friedman_time$statistic),
+  df        = friedman_time$parameter,
+  p         = friedman_time$p.value
+)
+write_tsv(friedman_summary, "./export/friedman_combination_benefit_by_time.tsv")
+write_tsv(delta_by_time,    "./export/delta_by_time_concentration.tsv")
 ```
 
 ```{r}
@@ -655,32 +657,19 @@ delta_summary <- delta_by_time %>%
     .groups    = "drop"
   )
 
-# Significance brackets from the actual Dunn post-hoc results (dunn_time).
-# A single-letter compact-letter-display can't represent this pattern: 24h
-# differs significantly from 4h and 6h (p.adj<0.05) but not from 2h or 10h,
-# while 2h/4h/6h/10h don't differ from each other -- that's not reducible to
-# disjoint letter groups, so draw brackets only over the pairs that are
-# actually significant instead of a letter per timepoint.
-sig_pairs <- dunn_time %>%
-  filter(p.adj < 0.05) %>%
-  mutate(
-    x1 = as.numeric(factor(as.character(group1), levels = c(2, 4, 6, 10, 24))),
-    x2 = as.numeric(factor(as.character(group2), levels = c(2, 4, 6, 10, 24)))
-  ) %>%
-  rowwise() %>%
-  mutate(
-    y = max(delta_summary$mean_delta[delta_summary$time %in% c(as.numeric(group1), as.numeric(group2))] +
-            delta_summary$se_delta[delta_summary$time %in% c(as.numeric(group1), as.numeric(group2))]) + 0.4
-  ) %>%
-  ungroup() %>%
-  arrange(x1) %>%
-  mutate(y = y + (row_number() - 1) * 0.5)  # stagger overlapping brackets vertically
+# Friedman result, reported once as a single omnibus annotation rather than
+# pairwise brackets -- the test establishes that the trajectory shape is
+# non-random across time (blocked by concentration) but, at n=4
+# concentrations, cannot itself identify which specific timepoints differ.
+friedman_label <- sprintf("Friedman test across timepoints:\nχ² = %.1f, df = %d, p = %s",
+                           friedman_time$statistic, friedman_time$parameter,
+                           format.pval(friedman_time$p.value, digits = 2, eps = 0.001))
 
 # Phase annotations
 phases <- tibble(
   xmin  = c(0.5, 1.5, 3.5),
   xmax  = c(1.5, 3.5, 5.5),
-  label = c("Early\n(building)", "Peak synergy\n(4h ≈ 6h)", "Declining\n(regrowth)"),
+  label = c("Early", "Peak benefit\n(4h ≈ 6h)", "Declining"),
   col   = c("#F39C12",            "#8E44AD",                  "#E74C3C")
 )
 
@@ -708,7 +697,7 @@ p_timepoint_synergy <- ggplot(delta_summary, aes(x = factor(time), y = mean_delt
   geom_hline(yintercept = c(1, 2), linetype = "dotted",
              color = "#8E44AD", alpha = 0.5, linewidth = 0.6) +
   annotate("text", x = 0.55, y = c(1.08, 2.08),
-           label = c("≥1 log synergy", "≥2 log synergy"),
+           label = c("≥1 log benefit", "≥2 log benefit"),
            size = 2.8, color = "#8E44AD", hjust = 0) +
 
   # Individual observations (jitter)
@@ -736,23 +725,25 @@ p_timepoint_synergy <- ggplot(delta_summary, aes(x = factor(time), y = mean_delt
                                 "FALSE" = "#AAB7B8"),
                     guide = "none") +
 
-  # Significance brackets (Dunn post-hoc, p.adj < 0.05 pairs only)
-  geom_segment(data = sig_pairs,
-               aes(x = x1, xend = x2, y = y, yend = y),
-               inherit.aes = FALSE, linewidth = 0.5, color = "black") +
-  geom_text(data = sig_pairs,
-            aes(x = (x1 + x2) / 2, y = y + 0.15, label = p.adj.signif),
-            size = 4.5, fontface = "bold", color = "black",
-            inherit.aes = FALSE) +
-
+  # Single omnibus Friedman annotation (see stats_friedman chunk) instead of
+  # pairwise significance brackets -- with n=4 concentrations, pairwise tests
+  # across 5 timepoints have essentially no power to resolve individual
+  # timepoint differences (smallest achievable exact p = 0.125), so the
+  # trajectory shape is supported by the omnibus test and described here
+  # from the observed means rather than claimed via pairwise significance.
+  annotate("label", x = 5, y = ceiling(max(delta_by_time$delta, na.rm = TRUE)),
+           label = friedman_label,
+           hjust = 1, vjust = 1, size = 3, fontface = "italic",
+           label.size = 0, fill = alpha("white", 0.7)) +
 
   scale_x_discrete(labels = paste0(c(2, 4, 6, 10, 24), "h")) +
   scale_y_continuous(breaks = seq(-4, ceiling(max(delta_by_time$delta,
-                                                   na.rm = TRUE)) + 1, 1)) +
+                                                   na.rm = TRUE)) + 1, 1),
+                      expand = expansion(mult = c(0.05, 0.12))) +
   labs(
     x        = "Time (hours)",
-    y        = "Δlog₁₀ CFU/mL (synergy)"
-  ) + theme_tk 
+    y        = "Δlog₁₀ CFU/mL (combination benefit)"
+  ) + theme_tk
 ```
 
 ```{r}
