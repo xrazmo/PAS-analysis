@@ -43,9 +43,6 @@ initial_inoculum <- 1e6
 # Detection limit (for values of 0, replace with this)
 detection_limit <- 100
 
-# Log10 killing threshold for "synergy" or "bactericidal"
-bactericidal_threshold <- 4  # ≥3 log10 reduction = bactericidal
-
 # Colors per condition group
 # color_palette <- c(
 #   "BC-CTR"       = "#2C3E50",   # Dark grey - bacteria control
