@@ -549,7 +549,12 @@ p_key_peaks
         plot.tag = element_text(size=11,face="bold"))
 
 ggsave("./figures/heat_flow.pdf",width=12,height = 10,device = "pdf")
-ggsave("./figures/heat_flow.png",width=12,height = 10,device = "png")
+
+# JPEG copy (300 dpi, DPI metadata embedded) replaces the PNG for journal submission
+magick::image_write(
+  magick::image_read_pdf("./figures/heat_flow.pdf", density = 300),
+  path = "./figures/heat_flow.jpg", format = "jpg", quality = 95, density = "300x300"
+)
 ```
 
 ---

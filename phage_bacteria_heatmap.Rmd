@@ -280,6 +280,13 @@ draw(hm, annotation_legend_list = legend_list)
 dev.off()
 cat("✓ Saved:", file.path(outdir, "phage_bacteria_heatmap.pdf"), "\n")
 
+# JPEG copy (300 dpi, DPI metadata embedded) for journal submission
+magick::image_write(
+  magick::image_read_pdf(file.path(outdir, "phage_bacteria_heatmap.pdf"), density = 300),
+  path = file.path(outdir, "phage_bacteria_heatmap.jpg"), format = "jpg", quality = 95, density = "300x300"
+)
+cat("✓ Saved:", file.path(outdir, "phage_bacteria_heatmap.jpg"), "\n")
+
 
 ```
 

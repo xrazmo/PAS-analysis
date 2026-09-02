@@ -130,6 +130,12 @@ p<- ( ppcoa /  pvenn_res$fig) + plot_layout(heights = c(0.8, 1.2))
 
 ggsave('./figures/pcoa_venn_heatmap.pdf',device='pdf',height = 11,width = 12)
 
+# JPEG copy (300 dpi, DPI metadata embedded) for journal submission
+magick::image_write(
+  magick::image_read_pdf('./figures/pcoa_venn_heatmap.pdf', density = 300),
+  path = './figures/pcoa_venn_heatmap.jpg', format = "jpg", quality = 95, density = "300x300"
+)
+
 ```
 PERMANOVA
 ```{r}
@@ -369,6 +375,12 @@ ggsave("./figures/response_classes_sankey.pdf",  #
        device = "pdf",
        width  = 9,
        height = 6)
+
+# JPEG copy (300 dpi, DPI metadata embedded) for journal submission
+magick::image_write(
+  magick::image_read_pdf("./figures/response_classes_sankey.pdf", density = 300),
+  path = "./figures/response_classes_sankey.jpg", format = "jpg", quality = 95, density = "300x300"
+)
 
 p
 

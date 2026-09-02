@@ -743,7 +743,15 @@ final_figure <- row1 / row2 +
   theme(plot.margin = margin(1, 1, 1, 1),
         axis.title.y.left = element_text(size = 10),plot.tag = element_text(size=11,face="bold"))
 
-ggsave("./figures/time_kill_combined2.png",width=10,height=13,device="png",type="cairo")
+tmp_png <- tempfile(fileext = ".png")
+ggsave(tmp_png, width = 10, height = 13, device = "png", type = "cairo")
+
+# JPEG copy (300 dpi, DPI metadata embedded, white background) replaces the PNG for journal submission
+magick::image_write(
+  magick::image_background(magick::image_read(tmp_png), "white"),
+  path = "./figures/time_kill_combined2.jpg", format = "jpg", quality = 95, density = "300x300"
+)
+file.remove(tmp_png)
 
 ```
 
